@@ -38,11 +38,34 @@ A sophisticated research agent built with [Pydantic AI](https://github.com/pydan
 
 ## Installation
 
-### 1. Install Python Dependencies
+### 1. Install with uv (recommended)
+
+Use Astral's `uv` as the project manager for fast, reproducible installs. Install `uv` (one-time), then create the project environment and install dependencies:
+
+```bash
+# Install uv (one-time)
+# Option A: standalone installer (macOS / Linux)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Option B: with pip (user or inside a small bootstrap venv)
+python3 -m pip install --user uv
+
+# From the project root, create/ensure the project venv and install dependencies
+cd /var/home/geo/Documents/MyAi
+uv venv
+uv sync   # install from pyproject.toml / lockfile
+
+# You can also add packages interactively
+uv add pydantic_ai duckduckgo-search
+```
+
+If you prefer the classic venv+pip workflow, the old commands still work (install the package from the current directory):
 
 ```bash
 cd /var/home/geo/Documents/MyAi
-pip install -r requirements.txt
+python3 -m venv venv
+source venv/bin/activate
+pip install .
 ```
 
 ### 2. Install RamaLama (Optional - for local models)
@@ -86,28 +109,43 @@ export GOOGLE_API_KEY="your-api-key-here"
 
 ### Using OpenAI (requires API key)
 
+Run the scripts inside the project's environment for reproducibility. With `uv`, use `uv run`:
+
 ```bash
 # Interactive mode
-python research_agent_example.py --mode interactive
+uv run python research_agent_example.py --mode interactive
 
 # Single question
-python research_agent_example.py --question "What is quantum entanglement?"
+uv run python research_agent_example.py --question "What is quantum entanglement?"
 
 # Run all examples
-python research_agent_example.py --mode all
+uv run python research_agent_example.py --mode all
 ```
 
 ### Using RamaLama (local, no API key needed)
 
+You can install RamaLama with `uv` or `pip`. Example using `uv`:
+
 ```bash
-# First, pull a model
+# Install RamaLama into the project env
+uv add ramalama
+
+# Pull a model
 ramalama pull granite
 
-# Run with RamaLama
-python research_agent_example.py --use-ramalama --ramalama-model granite
+# Run the research agent using the project environment
+uv run python research_agent_example.py --use-ramalama --ramalama-model granite
 
 # List available models
-python research_agent_example.py --show-models
+uv run python research_agent_example.py --show-models
+```
+
+Fallback with pip:
+
+```bash
+pip install ramalama
+ramalama pull granite
+python research_agent_example.py --use-ramalama --ramalama-model granite
 ```
 
 ## Usage Examples
@@ -163,23 +201,25 @@ finally:
 
 ## Command-Line Interface
 
+Run the CLI inside the project environment. Recommended (uv):
+
 ```bash
 # Interactive mode (default)
-python research_agent_example.py
+uv run python research_agent_example.py
 
 # Specific examples
-python research_agent_example.py --mode scientific
-python research_agent_example.py --mode technical
-python research_agent_example.py --mode current
+uv run python research_agent_example.py --mode scientific
+uv run python research_agent_example.py --mode technical
+uv run python research_agent_example.py --mode current
 
 # Custom parameters
-python research_agent_example.py \
+uv run python research_agent_example.py \
     --question "What are transformer models?" \
     --max-iterations 15 \
     --min-confidence 9
 
 # Use RamaLama with specific model
-python research_agent_example.py \
+uv run python research_agent_example.py \
     --use-ramalama \
     --ramalama-model deepseek \
     --mode technical
@@ -329,7 +369,8 @@ MyAi/
 ├── research_agent.py              # Core research agent
 ├── research_agent_example.py      # Example usage & CLI
 ├── ramalama_config.py             # RamaLama integration
-├── requirements.txt               # Python dependencies
+├── pyproject.toml                 # Project metadata & dependencies
+├── pyproject.toml                 # Project metadata & dependencies
 └── README.md                      # This file
 ```
 

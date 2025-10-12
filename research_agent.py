@@ -3,7 +3,6 @@ Personal Research Agent using Pydantic AI, RamaLama, and MCP tools
 This agent researches questions using multiple sources and iterates until confident.
 """
 import asyncio
-import os
 from dataclasses import dataclass
 from typing import Literal, Optional
 
@@ -49,8 +48,8 @@ class ResearchDependencies:
     max_iterations: int = 10
     min_confidence: int = 8  # Minimum confidence to stop (0-10)
     iteration_count: int = 0
-    sources_collected: list[ResearchSource] = None
-    thoughts: list[ResearchThought] = None
+    sources_collected: Optional[list[ResearchSource]] = None
+    thoughts: Optional[list[ResearchThought]] = None
     
     def __post_init__(self):
         if self.sources_collected is None:
@@ -63,12 +62,18 @@ class ResearchDependencies:
 # Research Agent with Looping Logic
 # ============================================================================
 
-research_agent = Agent(
-    'openai:gpt-4o',  # Can be swapped with ramalama served model
-    deps_type=ResearchDependencies,
-    output_type=FinalAnswer,
-    retries=2,
-    instructions="""You are a meticulous research assistant that finds definitive answers.
+def create_agent(model: str = "openai:gpt-4o") -> Agent:
+    """Create and return a configured Agent instance for the requested model.
+
+    Tools are registered inside this factory so importing this module does not
+    attempt to initialize cloud providers (like OpenAI) at import time.
+    """
+    agent = Agent(
+        model,
+        deps_type=ResearchDependencies,
+        output_type=FinalAnswer,
+        retries=2,
+        instructions="""You are a meticulous research assistant that finds definitive answers.
 
 Your research process:
 1. Break down complex questions into searchable components
@@ -91,148 +96,84 @@ IMPORTANT: For each iteration, provide a thought process showing:
 - Your current confidence level
 - What you still need to investigate
 """,
-)
-
-
-@research_agent.tool
-async def web_search(ctx: RunContext[ResearchDependencies], query: str) -> str:
-    """
-    Search the web using DuckDuckGo for current information.
-    Use this to find recent data, news, facts, and documentation.
-    
-    Args:
-        query: The search query (be specific for best results)
-    """
-    print(f"🔍 Searching web: {query}")
-    
-    # Use the DuckDuckGo tool from pydantic-ai common tools
-    results = await duckduckgo_search_tool()(query)
-    
-    # Track that we performed a search
-    ctx.deps.iteration_count += 1
-    
-    return f"Web search results for '{query}':\n{results}"
-
-
-@research_agent.tool
-async def analyze_source(
-    ctx: RunContext[ResearchDependencies],
-    title: str,
-    content: str,
-    url: Optional[str],
-    confidence: int
-) -> str:
-    """
-    Record and analyze a source of information.
-    Use this to save valuable information you find.
-    
-    Args:
-        title: Brief description of the source
-        content: Key information from the source
-        url: URL if available
-        confidence: Your confidence in this source (0-10)
-    """
-    source = ResearchSource(
-        title=title,
-        content=content,
-        url=url,
-        confidence=confidence
     )
-    ctx.deps.sources_collected.append(source)
-    
-    print(f"📚 Recorded source: {title} (confidence: {confidence}/10)")
-    
-    return f"Source recorded. Total sources: {len(ctx.deps.sources_collected)}"
 
+    # Register tools on the agent
+    @agent.tool
+    async def web_search(ctx: RunContext[ResearchDependencies], query: str) -> str:
+        print("🔍 Searching web:", query)
+        results = await duckduckgo_search_tool()(query)
+        ctx.deps.iteration_count += 1
+        return f"Web search results for '{query}':\n{results}"
 
-@research_agent.tool
-async def record_thought(
-    ctx: RunContext[ResearchDependencies],
-    observation: str,
-    analysis: str,
-    next_action: str,
-    confidence: int
-) -> str:
-    """
-    Record your thinking process and current confidence level.
-    Use this after each research step to track progress.
-    
-    Args:
-        observation: What you learned in this iteration
-        analysis: Your analysis of the information
-        next_action: What you plan to investigate next
-        confidence: Current confidence level (0-10)
-    """
-    thought = ResearchThought(
-        observation=observation,
-        analysis=analysis,
-        next_action=next_action,
-        confidence=confidence
-    )
-    ctx.deps.thoughts.append(thought)
-    
-    print(f"💭 Iteration {ctx.deps.iteration_count}: Confidence {confidence}/10")
-    print(f"   Next: {next_action}")
-    
-    # Check if we should continue
-    should_stop = (
-        confidence >= ctx.deps.min_confidence or 
-        ctx.deps.iteration_count >= ctx.deps.max_iterations
-    )
-    
-    if should_stop:
-        status = "HIGH CONFIDENCE REACHED!" if confidence >= ctx.deps.min_confidence else "Max iterations reached"
-        return f"Thought recorded. {status} Ready to provide final answer."
-    
-    return f"Thought recorded. Continue researching. (Iteration {ctx.deps.iteration_count}/{ctx.deps.max_iterations})"
+    @agent.tool
+    async def analyze_source(
+        ctx: RunContext[ResearchDependencies],
+        title: str,
+        content: str,
+        url: Optional[str],
+        confidence: int
+    ) -> str:
+        source = ResearchSource(
+            title=title,
+            content=content,
+            url=url,
+            confidence=confidence
+        )
+        ctx.deps.sources_collected.append(source)
+        print("📚 Recorded source:", title, "(confidence:", confidence, "/10)")
+        return f"Source recorded. Total sources: {len(ctx.deps.sources_collected)}"
 
+    @agent.tool
+    async def record_thought(
+        ctx: RunContext[ResearchDependencies],
+        observation: str,
+        analysis: str,
+        next_action: str,
+        confidence: int
+    ) -> str:
+        thought = ResearchThought(
+            observation=observation,
+            analysis=analysis,
+            next_action=next_action,
+            confidence=confidence
+        )
+        ctx.deps.thoughts.append(thought)
+        print("💭 Iteration", ctx.deps.iteration_count, ": Confidence", f"{confidence}/10")
+        print("   Next:", next_action)
+        should_stop = (
+            confidence >= ctx.deps.min_confidence or 
+            ctx.deps.iteration_count >= ctx.deps.max_iterations
+        )
+        if should_stop:
+            status = "HIGH CONFIDENCE REACHED!" if confidence >= ctx.deps.min_confidence else "Max iterations reached"
+            return f"Thought recorded. {status} Ready to provide final answer."
+        return f"Thought recorded. Continue researching. (Iteration {ctx.deps.iteration_count}/{ctx.deps.max_iterations})"
 
-@research_agent.tool
-async def check_academic_papers(
-    ctx: RunContext[ResearchDependencies],
-    topic: str
-) -> str:
-    """
-    Search for academic papers and research on a topic.
-    Use this for scientific or technical questions.
-    
-    Args:
-        topic: The research topic or question
-    """
-    print(f"📄 Searching academic sources: {topic}")
-    
-    # Search for academic content
-    query = f"site:arxiv.org OR site:scholar.google.com OR site:pubmed.ncbi.nlm.nih.gov {topic}"
-    results = await duckduckgo_search_tool()(query)
-    
-    ctx.deps.iteration_count += 1
-    
-    return f"Academic search results for '{topic}':\n{results}"
+    @agent.tool
+    async def check_academic_papers(
+        ctx: RunContext[ResearchDependencies],
+        topic: str
+    ) -> str:
+        print("📄 Searching academic sources:", topic)
+        query = f"site:arxiv.org OR site:scholar.google.com OR site:pubmed.ncbi.nlm.nih.gov {topic}"
+        results = await duckduckgo_search_tool()(query)
+        ctx.deps.iteration_count += 1
+        return f"Academic search results for '{topic}':\n{results}"
 
+    @agent.tool
+    async def search_documentation(
+        ctx: RunContext[ResearchDependencies],
+        technology: str,
+        topic: str
+    ) -> str:
+        print("📖 Searching documentation:", technology, "-", topic)
+        query = f"{technology} {topic} site:docs OR site:documentation OR official"
+        results = await duckduckgo_search_tool()(query)
+        ctx.deps.iteration_count += 1
+        return f"Documentation search for '{technology} {topic}':\n{results}"
 
-@research_agent.tool
-async def search_documentation(
-    ctx: RunContext[ResearchDependencies],
-    technology: str,
-    topic: str
-) -> str:
-    """
-    Search official documentation for technical questions.
-    Use this for software, API, or technical specification questions.
-    
-    Args:
-        technology: The technology/product name (e.g., 'Python', 'Docker', 'AWS')
-        topic: Specific topic or feature to research
-    """
-    print(f"📖 Searching documentation: {technology} - {topic}")
-    
-    # Search in documentation sites
-    query = f"{technology} {topic} site:docs OR site:documentation OR official"
-    results = await duckduckgo_search_tool()(query)
-    
-    ctx.deps.iteration_count += 1
-    
-    return f"Documentation search for '{technology} {topic}':\n{results}"
+    return agent
 
 
 # ============================================================================
@@ -257,9 +198,9 @@ async def research_question(
     Returns:
         FinalAnswer with evidence and reasoning
     """
-    print(f"\n{'='*80}")
-    print(f"🔬 RESEARCH AGENT STARTING")
-    print(f"{'='*80}")
+    print("\n" + "="*80)
+    print("🔬 RESEARCH AGENT STARTING")
+    print("" + "="*80)
     print(f"Question: {question}")
     print(f"Max iterations: {max_iterations}")
     print(f"Target confidence: {min_confidence}/10")
@@ -270,10 +211,8 @@ async def research_question(
         min_confidence=min_confidence
     )
     
-    # Override model if using ramalama
-    agent = research_agent
-    if model.startswith("http://") or model.startswith("https://"):
-        agent = agent.override(model=model)
+    # Create agent for requested model (OpenAI by default or a ramalama URL)
+    agent = create_agent(model)
     
     # Run the agent - it will loop internally via tools
     result = await agent.run(
@@ -296,16 +235,16 @@ Begin your research now!""",
     
     # Add collected sources to the final answer
     final = result.output
-    final.evidence = deps.sources_collected
+    final.evidence = deps.sources_collected or []
     
-    print(f"\n{'='*80}")
-    print(f"✅ RESEARCH COMPLETE")
-    print(f"{'='*80}")
+    print("\n" + "="*80)
+    print("✅ RESEARCH COMPLETE")
+    print("" + "="*80)
     print(f"Iterations used: {deps.iteration_count}/{max_iterations}")
-    print(f"Sources collected: {len(deps.sources_collected)}")
+    print(f"Sources collected: {len(deps.sources_collected or [])}")
     print(f"Final confidence: {final.confidence}/10")
     print(f"Certainty level: {final.certainty_level}")
-    print(f"{'='*80}\n")
+    print("" + "="*80 + "\n")
     
     return final
 
