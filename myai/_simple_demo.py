@@ -3,7 +3,7 @@ Simple example demonstrating the research agent
 Run this to see the agent in action!
 """
 import asyncio
-from research_agent import research_question
+from myai._research_agent import research_question
 
 
 async def simple_demo():

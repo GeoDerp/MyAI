@@ -3,17 +3,11 @@ MCP (Model Context Protocol) Integration for Research Agent
 
 This module demonstrates how to integrate MCP servers to extend
 the research agent's capabilities with additional tools.
-
-MCP provides a standardized way for agents to access:
-- File systems
-- Databases
-- APIs
-- Custom tools
 """
 from typing import Optional
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServer
-from research_agent import ResearchDependencies, FinalAnswer
+from myai._research_agent import ResearchDependencies, FinalAnswer
 
 
 def create_research_agent_with_mcp(
@@ -104,106 +98,38 @@ def print_mcp_examples():
     print("="*80 + "\n")
 
 
-# Example: Creating agent with MCP servers
-async def example_with_mcp():
-    """Example of using the research agent with MCP servers"""
-    
-    # Define MCP servers to use
-    mcp_servers = [
-        "http://localhost:8000/mcp",  # Filesystem MCP server
-        "http://localhost:8001/mcp",  # Database MCP server
-    ]
-    
-    # Create agent with MCP integration
-    agent = create_research_agent_with_mcp(mcp_servers)
-    
-    # Research with enhanced capabilities
-    deps = ResearchDependencies()
-    
-    result = await agent.run(
-        "Research quantum computing breakthroughs in 2024",
-        deps=deps
-    )
-    
-    return result
-
-
-# Example: Simple filesystem MCP server (for demonstration)
-class SimpleFilesystemMCP:
-    """
-    Simple example MCP server for local file access.
-    In production, use a proper MCP server implementation.
-    """
-    
-    def __init__(self, base_path: str = "."):
-        self.base_path = base_path
-    
-    async def read_file(self, path: str) -> str:
-        """Read a file from the filesystem"""
-        import os
-        full_path = os.path.join(self.base_path, path)
-        
-        if not os.path.exists(full_path):
-            return f"File not found: {path}"
-        
-        try:
-            with open(full_path, 'r', encoding='utf-8') as f:
-                return f.read()
-        except Exception as e:
-            return f"Error reading file: {e}"
-    
-    async def list_files(self, directory: str = ".") -> list[str]:
-        """List files in a directory"""
-        import os
-        full_path = os.path.join(self.base_path, directory)
-        
-        try:
-            return os.listdir(full_path)
-        except Exception as e:
-            return [f"Error listing directory: {e}"]
-
-
-# Ethical MCP Server Guidelines
-ETHICAL_MCP_GUIDELINES = """
-When integrating MCP servers, follow these ethical guidelines:
-
-1. PRIVACY
-   - Don't expose sensitive file systems without proper authentication
-   - Respect user privacy and data protection regulations
-   - Log access to sensitive resources
-
-2. SECURITY
-   - Use proper authentication for MCP servers
-   - Validate all inputs to prevent injection attacks
-   - Run MCP servers in isolated environments
-
-3. TRANSPARENCY
-   - Clearly document what data MCP servers can access
-   - Inform users when their local files/data are being accessed
-   - Log all MCP tool calls for audit purposes
-
-4. RATE LIMITING
-   - Implement rate limits to prevent abuse
-   - Respect external API terms of service
-   - Cache results where appropriate
-
-5. DATA HANDLING
-   - Don't store sensitive data unnecessarily
-   - Encrypt data in transit and at rest
-   - Provide data deletion mechanisms
-"""
-
-
 def print_ethical_guidelines():
     """Print ethical guidelines for MCP integration"""
+    ETHICAL_MCP_GUIDELINES = """
+    When integrating MCP servers, follow these ethical guidelines:
+
+    1. PRIVACY
+       - Don't expose sensitive file systems without proper authentication
+       - Respect user privacy and data protection regulations
+       - Log access to sensitive resources
+
+    2. SECURITY
+       - Use proper authentication for MCP servers
+       - Validate all inputs to prevent injection attacks
+       - Run MCP servers in isolated environments
+
+    3. TRANSPARENCY
+       - Clearly document what data MCP servers can access
+       - Inform users when their local files/data are being accessed
+       - Log all MCP tool calls for audit purposes
+
+    4. RATE LIMITING
+       - Implement rate limits to prevent abuse
+       - Respect external API terms of service
+       - Cache results where appropriate
+
+    5. DATA HANDLING
+       - Don't store sensitive data unnecessarily
+       - Encrypt data in transit and at rest
+       - Provide data deletion mechanisms
+    """
     print("="*80)
     print("ETHICAL MCP SERVER GUIDELINES")
     print("="*80)
     print(ETHICAL_MCP_GUIDELINES)
     print("="*80)
-
-
-if __name__ == "__main__":
-    print_mcp_examples()
-    print()
-    print_ethical_guidelines()

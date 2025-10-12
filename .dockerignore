@@ -1,0 +1,21 @@
+# Ignore common files that shouldn't be copied into the image build context
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+env
+venv
+.venv
+build
+dist
+*.egg-info
+node_modules
+.venv
+*.log
+config.env
+config.env.local
+*.env
+secrets*
+/.dockerignore
