@@ -16,6 +16,8 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
+from . import cache as _cache
+from typing import Dict, Any
 
 
 # ============================================================================
@@ -29,6 +31,9 @@ class ResearchSource(BaseModel):
     content: str = Field(description="Key information from the source")
     url: Optional[str] = Field(None, description="URL if applicable")
     confidence: int = Field(description="Confidence level 0-10 in this source", ge=0, le=10)
+    # Provenance fields populated when content is condensed/cached
+    fingerprint: Optional[str] = Field(None, description="Fingerprint of cached summary if available")
+    meta: Optional[dict] = Field(None, description="Additional provenance metadata")
 
 
 class ResearchThought(BaseModel):
@@ -48,6 +53,8 @@ class FinalAnswer(BaseModel):
     certainty_level: Literal["low", "medium", "high", "very_high"] = Field(
         description="Overall certainty in the answer"
     )
+    # Map of fingerprint -> provenance metadata (title/url/confidence/summary_meta)
+    provenance: Optional[dict] = Field(None, description="Mapping of summary fingerprints to provenance metadata")
 
 
 @dataclass
@@ -150,15 +157,59 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
         url: Optional[str],
         confidence: int
     ) -> str:
-        source = ResearchSource(
+        # Use helper to record and optionally condense the source
+        source = record_source_with_condensation(
+            deps=ctx.deps,
             title=title,
             content=content,
             url=url,
-            confidence=confidence
+            confidence=confidence,
+            enable_summarization=ctx.deps.enable_summarization,
+            summarization_threshold=ctx.deps.summarization_threshold,
+            model_id=os.environ.get('RAMALAMA_MODEL','local')
         )
-        ctx.deps.sources_collected.append(source)
         print("📚 Recorded source:", title, "(confidence:", confidence, "/10)")
         return f"Source recorded. Total sources: {len(ctx.deps.sources_collected)}"
+
+
+def record_source_with_condensation(
+    deps: ResearchDependencies,
+    title: str,
+    content: str,
+    url: Optional[str],
+    confidence: int,
+    enable_summarization: bool = False,
+    summarization_threshold: int = 800,
+    model_id: str = "local",
+) -> ResearchSource:
+    """Helper that records a ResearchSource on deps, optionally condensing long content
+
+    Returns the created ResearchSource instance.
+    """
+    fingerprint = None
+    meta = None
+    final_content = content
+    if enable_summarization and isinstance(content, str) and len(content) > summarization_threshold:
+        try:
+            condensed = _cache.summarize_document_with_content(
+                doi=url or "", condensation_config={}, max_tokens=summarization_threshold, model_id=model_id, prompt_fingerprint=None, source_text=content
+            )
+            fingerprint = condensed.get("fingerprint")
+            meta = condensed.get("meta")
+            final_content = condensed.get("summary")
+        except Exception:
+            pass
+
+    source = ResearchSource(
+        title=title,
+        content=final_content,
+        url=url,
+        confidence=confidence,
+        fingerprint=fingerprint,
+        meta=meta,
+    )
+    deps.sources_collected.append(source)
+    return source
 
     @agent.tool
     async def record_thought(
@@ -194,19 +245,102 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
         topic: str
     ) -> str:
         print("📄 Searching academic sources:", topic)
-        query = f"site:arxiv.org OR site:scholar.google.com OR site:pubmed.ncbi.nlm.nih.gov {topic}"
-        tool = duckduckgo_search_tool(max_results=3)
-        func = tool.function
-        if getattr(tool, 'takes_ctx', False):
-            results = await func(ctx, query)
-        else:
-            results = await func(query)
-        if isinstance(results, str) and len(results) > ctx.deps.summarization_threshold:
-            if ctx.deps.enable_summarization:
-                results = summarize_text(results, ctx.deps.summarization_threshold)
-            else:
-                results = results[: ctx.deps.summarization_threshold] + "... [truncated]"
+
+        def fallback(topic_inner: str):
+            tool = duckduckgo_search_tool(max_results=3)
+            func = tool.function
+            # shim synchronous fallback for simplicity
+            if getattr(tool, 'takes_ctx', False):
+                # Note: this branch is unlikely in the duckduckgo tool; prefer the other
+                import asyncio
+                return asyncio.get_event_loop().run_until_complete(func(ctx, topic_inner))
+            return asyncio.get_event_loop().run_until_complete(func(topic_inner))
+
+        # Use CrossRef-first search with simple quality filtering. If insufficient,
+        # fallback to duckduckgo search.
+        try:
+            candidates = academic_retrieval.search_with_fallback(
+                topic,
+                max_results=5,
+                min_year=None,
+                prefer_peer_review=True,
+                prefer_oa=True,
+                fallback_fn=lambda q: [
+                    {"title": "DuckDuckGo fallback result", "DOI": None, "URL": None, "raw": {"text": fallback(q)}}
+                ],
+            )
+        except Exception as e:
+            print("Academic retrieval failed, falling back to web search:", e)
+            candidates = [{"title": "Fallback: web search", "DOI": None, "URL": None, "raw": {"text": str(e)}}]
+
+        # Serialize candidates into a compact string for agent consumption
+        out_lines = []
+        for c in candidates:
+            title = c.get("title") or c.get("raw", {}).get("title") or "(no title)"
+            doi = c.get("DOI")
+            url = c.get("URL")
+            summary = c.get("raw", {}).get("text") if c.get("raw") else None
+            # If summarization enabled and summary is long, create or fetch condensed summary
+            fingerprint = None
+            if ctx.deps.enable_summarization and isinstance(summary, str) and len(summary) > ctx.deps.summarization_threshold:
+                # Use cache.summarize_document_with_content to condense and cache
+                try:
+                    condensed = _cache.summarize_document_with_content(
+                        doi or "", {}, max_tokens=ctx.deps.summarization_threshold, model_id=os.environ.get('RAMALAMA_MODEL','local'), prompt_fingerprint=None, source_text=summary
+                    )
+                    fingerprint = condensed.get("fingerprint")
+                    # replace summary with condensed summary text
+                    summary = condensed.get("summary")
+                    # attach meta to candidate for provenance
+                    c.setdefault("meta", {})
+                    c["meta"]["summary_fingerprint"] = fingerprint
+                    c["meta"]["summary_meta"] = condensed.get("meta")
+                except Exception:
+                    pass
+            line = f"- {title}"
+            if doi:
+                line += f" (DOI: {doi})"
+            if url:
+                line += f" {url}"
+            if summary and isinstance(summary, str) and len(summary) > 200:
+                if ctx.deps.enable_summarization:
+                    summary = summarize_text(summary, ctx.deps.summarization_threshold)
+                else:
+                    summary = summary[: ctx.deps.summarization_threshold] + "... [truncated]"
+            if summary:
+                line += f"\n    {summary}"
+            out_lines.append(line)
+
+        results = "\n".join(out_lines)
         return f"Academic search results for '{topic}':\n{results}"
+
+    @agent.tool
+    async def cache_get(
+        ctx: RunContext[ResearchDependencies],
+        key: str
+    ) -> str:
+        """Return cached summary JSON (string) if present, else an empty string."""
+        res = _cache.cache_get(key)
+        return json.dumps(res) if res is not None else ""
+
+    @agent.tool
+    async def cache_set(
+        ctx: RunContext[ResearchDependencies],
+        key: str,
+        value: dict
+    ) -> str:
+        _cache.cache_set(key, value)
+        return "OK"
+
+    @agent.tool
+    async def summarize_document_tool(
+        ctx: RunContext[ResearchDependencies],
+        doi: str,
+        condensation_config: dict,
+        max_tokens: int = 2000,
+    ) -> str:
+        out = _cache.summarize_document(doi, condensation_config, max_tokens=max_tokens)
+        return json.dumps(out)
 
     @agent.tool
     async def search_documentation(
@@ -259,6 +393,98 @@ def summarize_text(text: str, max_chars: int = 800) -> str:
     if len(out) < len(text):
         out = out.strip() + '... [summary]'
     return out
+
+
+def _find_sentence_with(text: str, term: str) -> str | None:
+    if not text or not term:
+        return None
+    import re
+    # split into sentences and find one containing the term (case-insensitive)
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    term_l = term.lower()
+    for s in sentences:
+        if term_l in s.lower():
+            return s.strip()
+    return None
+
+
+def generate_provenance(final: FinalAnswer, deps: ResearchDependencies) -> Dict[str, Any]:
+    """Generate a provenance map: fingerprint -> metadata including claims.
+
+    For each collected source that has a fingerprint, search the final.answer
+    and final.reasoning for mentions of the source title, DOI, or URL and
+    record the sentence(s) where the mention occurred.
+    """
+    prov: Dict[str, Any] = {}
+    answer_text = (final.answer or "") + "\n" + (final.reasoning or "")
+    for src in deps.sources_collected or []:
+        fp = getattr(src, "fingerprint", None)
+        if not fp:
+            continue
+        claims = []
+        # search by title, DOI, URL
+        terms = [src.title or ""]
+        # try DOI in src.meta if present
+        doi = None
+        if isinstance(src.meta, dict):
+            doi = src.meta.get("DOI") or src.meta.get("doi")
+        if doi:
+            terms.append(doi)
+        if src.url:
+            terms.append(src.url)
+
+        for t in terms:
+            if not t:
+                continue
+            s = _find_sentence_with(answer_text, t)
+            if s:
+                claims.append(s)
+
+        prov[fp] = {
+            "title": src.title,
+            "url": src.url,
+            "confidence": src.confidence,
+            "summary_meta": src.meta,
+            "claims": claims,
+        }
+    return prov
+
+
+def _make_claim_id(claim_text: str) -> str:
+    import hashlib
+    if not claim_text:
+        return ""
+    h = hashlib.sha256(claim_text.encode("utf-8")).hexdigest()
+    # short id for readability
+    return h[:12]
+
+
+def format_provenance_report(final: FinalAnswer, deps: ResearchDependencies) -> Dict[str, Any]:
+    """Create a provenance report with both fingerprint->metadata and claim_id->fingerprints maps.
+
+    Output shape:
+      {
+        "by_fingerprint": { fp: { ... , "claims": [...] } },
+        "by_claim_id": { claim_id: { "claim": text, "fingerprints": [fp,...] } }
+      }
+    """
+    by_fp = generate_provenance(final, deps)
+    by_claim: Dict[str, Dict[str, Any]] = {}
+    for fp, meta in by_fp.items():
+        for claim in meta.get("claims", []) or []:
+            cid = _make_claim_id(claim)
+            if cid not in by_claim:
+                by_claim[cid] = {"claim": claim, "fingerprints": []}
+            if fp not in by_claim[cid]["fingerprints"]:
+                by_claim[cid]["fingerprints"].append(fp)
+
+    return {"by_fingerprint": by_fp, "by_claim_id": by_claim}
+
+
+def apply_provenance_to_final(final: FinalAnswer, deps: ResearchDependencies) -> None:
+    """Attach a formatted provenance report to the FinalAnswer.provenance field in-place."""
+    report = format_provenance_report(final, deps)
+    final.provenance = report
 
 
 
