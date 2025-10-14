@@ -153,7 +153,7 @@ user network and point the agent at the RamaLama container by name.
 podman network create myai-net
 
 # Start RamaLama on that network (host container will be reachable as 'ramalama')
-ramalama serve --network=myai-net --port 8080 --name research-agent granite4:small-h
+ramalama serve  --ngl 0 --image quay.io/ramalama/intel-gpu:latest  --network=myai-net --port 8080 --name research-agent granite4:small-h
 #some usefull arguments --ngl 0 --image quay.io/ramalama/intel-gpu:latest 
 
 # Optional: run Redis on the same network (recommended for production caching)
