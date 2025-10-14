@@ -55,7 +55,7 @@ async def example_current_events():
     return result
 
 
-async def example_with_ramalama(model_name: str = "granite", in_container: bool = False, max_iterations: int = 2):
+async def example_with_ramalama(model_name: str = "granite", in_container: bool = False, max_iterations: int = 2, enable_summarization: bool = False):
     """Example: Use RamaLama instead of OpenAI"""
     print("\n" + "=" * 80)
     print(f"USING RAMALAMA MODEL: {model_name}")
@@ -68,6 +68,15 @@ async def example_with_ramalama(model_name: str = "granite", in_container: bool 
     # calling `serve()`.
     ramalama = RamaLamaConfig(model_name=model_name, port=8080)
 
+    # Check Redis cache status (optional but recommended for production)
+    try:
+        from myai import cache as _cache_module
+        redis_ok = _cache_module.verify_redis_connection()
+    except Exception:
+        redis_ok = False
+
+    print(f"\n[INFO] Redis cache available: {redis_ok}")
+
     if in_container:
         print("\n[INFO] Running inside a container; assuming RamaLama is provided externally on the host.")
         result = await research_question(
@@ -75,7 +84,7 @@ async def example_with_ramalama(model_name: str = "granite", in_container: bool 
             max_iterations=max_iterations,
             min_confidence=7,
             model=ramalama.base_url,
-            enable_summarization=True
+            enable_summarization=(enable_summarization or True)
         )
 
         display_result(result)
@@ -96,10 +105,16 @@ async def example_with_ramalama(model_name: str = "granite", in_container: bool 
             question="Explain the key differences between containers and virtual machines.",
             max_iterations=max_iterations,
             min_confidence=7,
-            model=ramalama.base_url  # Use RamaLama endpoint
+            model=ramalama.base_url,  # Use RamaLama endpoint
+            enable_summarization=enable_summarization
         )
 
         display_result(result)
+
+    # Note: the agent's `check_academic_papers()` tool will prefer
+    # academic_retrieval (CrossRef/arXiv/etc.) and fall back to a web
+    # search if no academic results are found. The Redis cache (if
+    # available) speeds up document condensation/persistence.
 
         return result
 
@@ -135,7 +150,7 @@ def display_result(result: FinalAnswer):
     print("\n" + "=" * 80)
 
 
-async def interactive_mode():
+async def interactive_mode(enable_summarization: bool = False):
     """Interactive mode for asking research questions"""
     print("\n" + "=" * 80)
     print("INTERACTIVE RESEARCH MODE")
@@ -189,7 +204,8 @@ async def interactive_mode():
             result = await research_question(
                 question=question,
                 max_iterations=max_iter,
-                min_confidence=min_conf
+                min_confidence=min_conf,
+                enable_summarization=enable_summarization
             )
 
             display_result(result)
@@ -269,6 +285,11 @@ def main():
         action="store_true",
         help="Indicate the program is running inside a container (set by Dockerfile/entrypoint)",
     )
+    parser.add_argument(
+        "--enable-summarization",
+        action="store_true",
+        help="Enable lightweight summarization of long sources to reduce prompt size",
+    )
 
     args = parser.parse_args()
 
@@ -286,6 +307,8 @@ def main():
             question=args.question,
             max_iterations=args.max_iterations,
             min_confidence=args.min_confidence
+        ,
+            enable_summarization=(args.enable_summarization if args.enable_summarization else None)
         ))
         display_result(result)
         return
@@ -295,7 +318,12 @@ def main():
         # When running inside a container the --in-container flag is provided
         # by the entrypoint; pass it through so example_with_ramalama can
         # avoid attempting to spawn a host-side RamaLama container.
-        asyncio.run(example_with_ramalama(args.ramalama_model, in_container=args.in_container))
+        asyncio.run(example_with_ramalama(
+            args.ramalama_model,
+            in_container=args.in_container,
+            max_iterations=args.max_iterations,
+            enable_summarization=(args.enable_summarization if args.enable_summarization else None),
+        ))
     elif args.mode == "scientific":
         asyncio.run(example_scientific_research())
     elif args.mode == "technical":
@@ -303,7 +331,9 @@ def main():
     elif args.mode == "current":
         asyncio.run(example_current_events())
     elif args.mode == "interactive":
-        asyncio.run(interactive_mode())
+        # Pass the CLI summarization flag into interactive mode so the
+        # research loop uses summarization when requested.
+        asyncio.run(interactive_mode(enable_summarization=(args.enable_summarization if args.enable_summarization else None)))
     elif args.mode == "all":
         asyncio.run(run_all_examples())
 

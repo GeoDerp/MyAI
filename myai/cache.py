@@ -31,6 +31,22 @@ try:
 except Exception as e:
     logger.debug("Redis not configured or import failed: %s", e)
 
+
+def verify_redis_connection(timeout: float = 1.0) -> bool:
+    """Return True if Redis is configured and a ping succeeds.
+
+    This is intended as a lightweight runtime check callers can use to
+    determine whether Redis-based caching is active.
+    """
+    global _redis_client
+    if _redis_client is None:
+        return False
+    try:
+        # small timeout-friendly ping; redis-py handles this internally
+        return _redis_client.ping()
+    except Exception:
+        return False
+
 CACHE_DIR = os.path.join(os.getcwd(), ".cache", "summaries")
 os.makedirs(CACHE_DIR, exist_ok=True)
 

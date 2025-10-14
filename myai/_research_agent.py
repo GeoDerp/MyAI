@@ -12,12 +12,141 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 import os
+import logging
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
+import json
+
+# Avoid importing potentially heavy/optional provider and tool modules at
+# import time. We'll import them lazily when needed so the package can be
+# imported even when OpenAI/duckduckgo or local RamaLama services aren't
+# available.
+_duckduckgo_tool = None
+
+def _get_duckduckgo_tool():
+    global _duckduckgo_tool
+    if _duckduckgo_tool is None:
+        # import lazily; if the optional dependency isn't installed we
+        # provide a silent no-op stub so callers don't see noisy
+        # import-time warnings or errors.
+        try:
+            # Some versions of the duckduckgo client emit a RuntimeWarning
+            # about package renaming; filter it here so startup logs stay clean.
+            import warnings
+            with warnings.catch_warnings():
+                # Use a safe regex message match and filter RuntimeWarning during import
+                warnings.filterwarnings("ignore", category=RuntimeWarning, message=r".*duckduckgo_search.*renamed.*")
+                from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool as _dd
+            # Wrap the factory so the tool's function suppresses the runtime warning when invoked
+            def _factory_wrapper(*f_args, **f_kwargs):
+                tool = _dd(*f_args, **f_kwargs)
+                try:
+                    orig_func = tool.function
+                except Exception:
+                    return tool
+                import warnings as _warnings
+
+                class _FuncWrapper:
+                    async def __call__(self, *a, **kw):
+                        with _warnings.catch_warnings():
+                            _warnings.filterwarnings("ignore", category=RuntimeWarning, message=r".*duckduckgo_search.*renamed.*")
+                            return await orig_func(*a, **kw)
+
+                tool.function = _FuncWrapper()
+                return tool
+
+            _duckduckgo_tool = _factory_wrapper
+        except Exception:
+            # Minimal stub with compatible shape used by the agent tools.
+            class _StubTool:
+                takes_ctx = False
+
+                class function:
+                    @staticmethod
+                    async def __call__(*args, **kwargs):
+                        # Return an empty / benign result so the agent simply
+                        # falls back to other sources instead of failing.
+                        return ""
+
+            _duckduckgo_tool = lambda *_, **__: _StubTool()
+    return _duckduckgo_tool
 from . import cache as _cache
 from typing import Dict, Any
+
+
+def record_source_with_condensation(
+    deps: "ResearchDependencies",
+    title: str,
+    content: str,
+    url: Optional[str],
+    confidence: int,
+    enable_summarization: bool = False,
+    summarization_threshold: int = 800,
+    model_id: str = "local",
+) -> "ResearchSource":
+    """Helper that records a ResearchSource on deps, optionally condensing long content
+
+    Returns the created ResearchSource instance.
+    """
+    fingerprint = None
+    meta = None
+    final_content = content
+    if enable_summarization and isinstance(content, str) and len(content) > summarization_threshold:
+        try:
+            condensed = _cache.summarize_document_with_content(
+                doi=url or "", condensation_config={}, max_tokens=summarization_threshold, model_id=model_id, prompt_fingerprint=None, source_text=content
+            )
+            fingerprint = condensed.get("fingerprint")
+            meta = condensed.get("meta")
+            final_content = condensed.get("summary")
+        except Exception:
+            pass
+
+    source = ResearchSource(
+        title=title,
+        content=final_content,
+        url=url,
+        confidence=confidence,
+        fingerprint=fingerprint,
+        meta=meta,
+    )
+    deps.sources_collected.append(source)
+    return source
+
+
+# Logging
+logger = logging.getLogger(__name__)
+
+
+def should_enable_summarization(model: str | None, enable_summarization: Optional[bool]) -> tuple[bool, str]:
+    """Decide whether summarization should be enabled.
+
+    Returns (enabled: bool, reason: str).
+    If enable_summarization is explicitly provided (True/False) that value
+    is used and the reason notes an explicit override. Otherwise a small
+    heuristic enables summarization for local RamaLama endpoints, when
+    RAMALAMA env vars are present, or when common local model names are
+    detected (e.g., 'granite', 'gpt-oss', 'deepseek').
+    """
+    if enable_summarization is not None:
+        return bool(enable_summarization), "explicit override"
+
+    ramalama_host = os.environ.get('RAMALAMA_HOST')
+    ramalama_port = os.environ.get('RAMALAMA_PORT')
+    model_str = model or ""
+    is_local_endpoint = isinstance(model_str, str) and model_str.startswith(('http://', 'https://'))
+    likely_local_model_name = any(k in model_str for k in ("granite", "gpt-oss", "deepseek"))
+
+    enabled = bool(is_local_endpoint or ramalama_host or ramalama_port or likely_local_model_name)
+    parts = []
+    if is_local_endpoint:
+        parts.append('local_endpoint')
+    if ramalama_host or ramalama_port:
+        parts.append('ramalama_env')
+    if likely_local_model_name:
+        parts.append('local_model_name')
+    reason = 'heuristic:' + (','.join(parts) if parts else 'no_local_indicators')
+    return enabled, reason
+
 
 
 # ============================================================================
@@ -93,7 +222,21 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
     # points at that base URL and create an OpenAIChatModel instance. Use a
     # shorter instruction set for local models to avoid exceeding context
     # limits on smaller local models.
+    # If RAMALAMA_HOST or RAMALAMA_PORT env vars are set and no explicit
+    # model HTTP URL was provided, prefer building a RamaLama HTTP endpoint
+    # and avoid initializing OpenAI cloud clients.
+    ramalama_host = os.environ.get('RAMALAMA_HOST')
+    ramalama_port = os.environ.get('RAMALAMA_PORT')
+    if not (isinstance(model, str) and model.startswith(('http://', 'https://'))) and ramalama_host and ramalama_port:
+        model = f"http://{ramalama_host}:{ramalama_port}/v1"
+
     if isinstance(model, str) and model.startswith(('http://', 'https://')):
+        # RamaLama/OpenAI-compatible HTTP endpoint provided. Import the
+        # OpenAI provider / model classes lazily so we avoid initializing
+        # cloud clients at import time when a local RamaLama is used.
+        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+
         ram_model_name = os.environ.get('RAMALAMA_MODEL') or os.environ.get('RAMALAMA_MODEL_NAME') or 'granite'
         provider = OpenAIProvider(base_url=model)
         model_obj = OpenAIChatModel(ram_model_name, provider=provider)
@@ -135,7 +278,7 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
     async def web_search(ctx: RunContext[ResearchDependencies], query: str) -> str:
         print("🔍 Searching web:", query)
         # Limit results to keep outputs small for local models
-        tool = duckduckgo_search_tool(max_results=3)
+        tool = _get_duckduckgo_tool()(max_results=3)
         func = tool.function
         if getattr(tool, 'takes_ctx', False):
             results = await func(ctx, query)
@@ -171,45 +314,6 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
         print("📚 Recorded source:", title, "(confidence:", confidence, "/10)")
         return f"Source recorded. Total sources: {len(ctx.deps.sources_collected)}"
 
-
-def record_source_with_condensation(
-    deps: ResearchDependencies,
-    title: str,
-    content: str,
-    url: Optional[str],
-    confidence: int,
-    enable_summarization: bool = False,
-    summarization_threshold: int = 800,
-    model_id: str = "local",
-) -> ResearchSource:
-    """Helper that records a ResearchSource on deps, optionally condensing long content
-
-    Returns the created ResearchSource instance.
-    """
-    fingerprint = None
-    meta = None
-    final_content = content
-    if enable_summarization and isinstance(content, str) and len(content) > summarization_threshold:
-        try:
-            condensed = _cache.summarize_document_with_content(
-                doi=url or "", condensation_config={}, max_tokens=summarization_threshold, model_id=model_id, prompt_fingerprint=None, source_text=content
-            )
-            fingerprint = condensed.get("fingerprint")
-            meta = condensed.get("meta")
-            final_content = condensed.get("summary")
-        except Exception:
-            pass
-
-    source = ResearchSource(
-        title=title,
-        content=final_content,
-        url=url,
-        confidence=confidence,
-        fingerprint=fingerprint,
-        meta=meta,
-    )
-    deps.sources_collected.append(source)
-    return source
 
     @agent.tool
     async def record_thought(
@@ -247,7 +351,7 @@ def record_source_with_condensation(
         print("📄 Searching academic sources:", topic)
 
         def fallback(topic_inner: str):
-            tool = duckduckgo_search_tool(max_results=3)
+            tool = _get_duckduckgo_tool()(max_results=3)
             func = tool.function
             # shim synchronous fallback for simplicity
             if getattr(tool, 'takes_ctx', False):
@@ -259,6 +363,8 @@ def record_source_with_condensation(
         # Use CrossRef-first search with simple quality filtering. If insufficient,
         # fallback to duckduckgo search.
         try:
+            # Import academic_retrieval lazily to avoid import-time network calls
+            import myai.academic_retrieval as academic_retrieval
             candidates = academic_retrieval.search_with_fallback(
                 topic,
                 max_results=5,
@@ -266,11 +372,12 @@ def record_source_with_condensation(
                 prefer_peer_review=True,
                 prefer_oa=True,
                 fallback_fn=lambda q: [
-                    {"title": "DuckDuckGo fallback result", "DOI": None, "URL": None, "raw": {"text": fallback(q)}}
+                    {"title": "Web fallback result", "DOI": None, "URL": None, "raw": {"text": fallback(q)}}
                 ],
             )
         except Exception as e:
-            print("Academic retrieval failed, falling back to web search:", e)
+            # If academic retrieval or its import fails, fallback to a web search result.
+            print("Academic retrieval unavailable, falling back to web search.")
             candidates = [{"title": "Fallback: web search", "DOI": None, "URL": None, "raw": {"text": str(e)}}]
 
         # Serialize candidates into a compact string for agent consumption
@@ -350,7 +457,7 @@ def record_source_with_condensation(
     ) -> str:
         print("📖 Searching documentation:", technology, "-", topic)
         query = f"{technology} {topic} site:docs OR site:documentation OR official"
-        tool = duckduckgo_search_tool(max_results=3)
+        tool = _get_duckduckgo_tool()(max_results=3)
         func = tool.function
         if getattr(tool, 'takes_ctx', False):
             results = await func(ctx, query)
@@ -497,7 +604,7 @@ async def research_question(
     max_iterations: int = 10,
     min_confidence: int = 8,
     model: str = "openai:gpt-4o",
-    enable_summarization: bool = False,
+    enable_summarization: Optional[bool] = None,
 ) -> FinalAnswer:
     """
     Research a question with iterative refinement until high confidence.
@@ -523,8 +630,15 @@ async def research_question(
         max_iterations=max_iterations,
         min_confidence=min_confidence
     )
-    # Wire in opt-in summarization
-    deps.enable_summarization = enable_summarization
+    # Determine summarization behavior. If the caller explicitly set
+    # enable_summarization (True/False), use that. If it's None, enable
+    # summarization heuristically for local RamaLama / small models to
+    # avoid exceeding model context windows.
+    # Decide whether summarization should be enabled and log the choice so
+    # users can see whether it was an explicit override or a heuristic.
+    chosen, reason = should_enable_summarization(model, enable_summarization)
+    deps.enable_summarization = chosen
+    logger.info("Summarization enabled=%s (%s)", chosen, reason)
     
     # Create agent for requested model (OpenAI by default or a ramalama URL)
     agent = create_agent(model)

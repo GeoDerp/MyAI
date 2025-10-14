@@ -153,7 +153,7 @@ user network and point the agent at the RamaLama container by name.
 podman network create myai-net
 
 # Start RamaLama on that network (host container will be reachable as 'ramalama')
-ramalama serve --network=myai-net --port 8080 --name research-agent-gpt-oss gpt-oss:20b -d
+ramalama serve --network=myai-net --port 8080 --name research-agent-gpt-oss gpt-oss:20b
 
 # Optional: run Redis on the same network (recommended for production caching)
 podman run -d --name myai-redis --network=myai-net \
@@ -163,46 +163,26 @@ podman run -d --name myai-redis --network=myai-net \
 # Run the agent on the same network and point it at the ramalama container.
 
 podman run --rm -it --network=myai-net \
-    --env RAMALAMA_HOST=ramalama \
     --env RAMALAMA_PORT=8080 \
     --env RAMALAMA_MODEL=gpt-oss:20b \
     --env REDIS_URL=redis://myai-redis:6379/0 \
+    --env RAMALAMA_HOST=research-agent-gpt-oss \
     localhost/myai-ramalama:latest --use-ramalama --ramalama-model gpt-oss:20b
+
+Note: 
+- The example runtime checks the Redis cache at startup (via
+`cache.verify_redis_connection()`); setting `REDIS_URL` to a reachable Redis
+instance enables condensation caching and improves performance.
+-Optionally expose RamaLama port to host with `-p 8080:8080` on the RamaLama
+    server if you need external access.
 ```
 
-Notes:
-- If you do want the agent to be able to spawn host-side containers (not the
-    default for in-container runs), mount the host podman socket into the
-    container — but this is optional for the common case where RamaLama is
-    already running on the host.
-- Optionally expose RamaLama port to host with `-p 8080:8080` on the RamaLama
-    server if you need external access.
 
 Networking tip — run both containers on a shared user network
 ------------------------------------------------------------
 If you prefer the agent and RamaLama to communicate over a container
 network (so the agent can reach the RamaLama container by name), create a
 user-defined podman network and attach both containers to it. Example:
-
-```bash
-# Create a user network
-podman network create myai-net
-
-# Start RamaLama on that network (container name will be reachable as 'ramalama')
-ramalama serve --network=myai-net --port 8080 --name research-agent-gpt-oss gpt-oss:20b
-
-
-# Run the agent on the same network and point it at the ramalama container
-podman run --rm -it --network myai-net \
-    --env RAMALAMA_HOST=ramalama \
-    --env RAMALAMA_PORT=8080 \
-    --env RAMALAMA_MODEL=gpt-oss:20b \
-    myai-ramalama --use-ramalama --ramalama-model gpt-oss:20b
-```
-
-This makes the agent call `http://ramalama:8080/v1` which resolves to the
-RamaLama container on the shared `myai-net` network. This avoids localhost
-port mapping and is a reliable pattern for multi-container setups.
 
 #### running agent on host 
 
