@@ -153,7 +153,7 @@ user network and point the agent at the RamaLama container by name.
 podman network create myai-net
 
 # Start RamaLama on that network (host container will be reachable as 'ramalama')
-ramalama serve --network=myai-net --port 8080 --name research-agent-gpt-oss gpt-oss:20b
+ramalama serve  --network=myai-net --port 8080 --name research-agent-gpt-oss gpt-oss:20b
 
 # Optional: run Redis on the same network (recommended for production caching)
 podman run -d --name myai-redis --network=myai-net \
@@ -161,7 +161,7 @@ podman run -d --name myai-redis --network=myai-net \
     docker.io/library/redis:7-alpine
 
 # Run the agent on the same network and point it at the ramalama container.
-
+podman build . -t myai-ramalama
 podman run --rm -it --network=myai-net \
     --env RAMALAMA_PORT=8080 \
     --env RAMALAMA_MODEL=gpt-oss:20b \

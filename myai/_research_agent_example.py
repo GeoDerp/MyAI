@@ -5,6 +5,37 @@ import asyncio
 import argparse
 from myai._research_agent import research_question, FinalAnswer
 from myai._ramalama_config import RamaLamaConfig, print_model_recommendations
+import threading
+import sys
+import time
+
+
+class Spinner:
+    """Simple terminal spinner as a context manager."""
+    def __init__(self, msg: str = "Working"):
+        self.msg = msg
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+
+    def _spin(self):
+        chars = "|/-\\"
+        idx = 0
+        while not self._stop.is_set():
+            # Write spinner to stderr so it doesn't get lost among stdout logs
+            print(f"\r{self.msg}... {chars[idx % len(chars)]}", end="", flush=True, file=sys.stderr)
+            idx += 1
+            time.sleep(0.12)
+        # Clear the spinner line on exit
+        print("\r" + " " * (len(self.msg) + 8) + "\r", end="", flush=True, file=sys.stderr)
+
+    def __enter__(self):
+        self._stop.clear()
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self._stop.set()
+        self._thread.join()
 
 
 async def example_scientific_research():
@@ -79,13 +110,24 @@ async def example_with_ramalama(model_name: str = "granite", in_container: bool 
 
     if in_container:
         print("\n[INFO] Running inside a container; assuming RamaLama is provided externally on the host.")
-        result = await research_question(
-            question="Explain the key differences between containers and virtual machines.",
-            max_iterations=max_iterations,
-            min_confidence=7,
-            model=ramalama.base_url,
-            enable_summarization=(enable_summarization or True)
-        )
+        # Show a small CLI spinner while waiting for the model to respond
+        if sys.stdout.isatty():
+            with Spinner("Researching (this may take a while)"):
+                result = await research_question(
+                    question="Explain the key differences between containers and virtual machines.",
+                    max_iterations=max_iterations,
+                    min_confidence=7,
+                    model=ramalama.base_url,
+                    enable_summarization=(enable_summarization or True)
+                )
+        else:
+            result = await research_question(
+                question="Explain the key differences between containers and virtual machines.",
+                max_iterations=max_iterations,
+                min_confidence=7,
+                model=ramalama.base_url,
+                enable_summarization=(enable_summarization or True)
+            )
 
         display_result(result)
         return result
@@ -101,13 +143,24 @@ async def example_with_ramalama(model_name: str = "granite", in_container: bool 
         await asyncio.sleep(5)
 
         # Use the local model with a limited number of iterations to keep requests small
-        result = await research_question(
-            question="Explain the key differences between containers and virtual machines.",
-            max_iterations=max_iterations,
-            min_confidence=7,
-            model=ramalama.base_url,  # Use RamaLama endpoint
-            enable_summarization=enable_summarization
-        )
+        # Show a spinner in interactive host-run case as well
+        if sys.stdout.isatty():
+            with Spinner("Researching (this may take a while)"):
+                result = await research_question(
+                    question="Explain the key differences between containers and virtual machines.",
+                    max_iterations=max_iterations,
+                    min_confidence=7,
+                    model=ramalama.base_url,  # Use RamaLama endpoint
+                    enable_summarization=enable_summarization
+                )
+        else:
+            result = await research_question(
+                question="Explain the key differences between containers and virtual machines.",
+                max_iterations=max_iterations,
+                min_confidence=7,
+                model=ramalama.base_url,  # Use RamaLama endpoint
+                enable_summarization=enable_summarization
+            )
 
         display_result(result)
 
@@ -303,13 +356,22 @@ def main():
 
     # Handle single question mode
     if args.question:
-        result = asyncio.run(research_question(
-            question=args.question,
-            max_iterations=args.max_iterations,
-            min_confidence=args.min_confidence
-        ,
-            enable_summarization=(args.enable_summarization if args.enable_summarization else None)
-        ))
+        # Show spinner while waiting for the agent if running in a TTY
+        if sys.stdout.isatty():
+            with Spinner("Researching (this may take a while)"):
+                result = asyncio.run(research_question(
+                    question=args.question,
+                    max_iterations=args.max_iterations,
+                    min_confidence=args.min_confidence,
+                    enable_summarization=(args.enable_summarization if args.enable_summarization else None)
+                ))
+        else:
+            result = asyncio.run(research_question(
+                question=args.question,
+                max_iterations=args.max_iterations,
+                min_confidence=args.min_confidence,
+                enable_summarization=(args.enable_summarization if args.enable_summarization else None)
+            ))
         display_result(result)
         return
 
