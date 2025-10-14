@@ -167,7 +167,9 @@ podman run --rm -it --network=myai-net \
     --env RAMALAMA_MODEL=gpt-oss:20b \
     --env REDIS_URL=redis://myai-redis:6379/0 \
     --env RAMALAMA_HOST=research-agent-gpt-oss \
-    localhost/myai-ramalama:latest --use-ramalama --ramalama-model gpt-oss:20b
+    localhost/myai-ramalama:latest \
+    --use-ramalama --ramalama-model gpt-oss:20b \
+    --mode interactive --question "why is the sky blue"
 
 Note: 
 - The example runtime checks the Redis cache at startup (via
