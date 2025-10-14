@@ -3,6 +3,7 @@ Example usage of the Research Agent with various configurations
 """
 import asyncio
 import argparse
+import os
 from myai._research_agent import research_question, FinalAnswer
 from myai._ramalama_config import RamaLamaConfig, print_model_recommendations
 import threading
@@ -308,7 +309,7 @@ def main():
     )
     parser.add_argument(
         "--ramalama-model",
-        default="granite",
+        default="granite4",
         help="RamaLama model to use (default: granite)"
     )
     parser.add_argument(
@@ -339,9 +340,9 @@ def main():
         help="Indicate the program is running inside a container (set by Dockerfile/entrypoint)",
     )
     parser.add_argument(
-        "--enable-summarization",
+        "--disable-summarization",
         action="store_true",
-        help="Enable lightweight summarization of long sources to reduce prompt size",
+        help="Disable lightweight summarization of long sources (summarization is enabled by default)",
     )
 
     args = parser.parse_args()
@@ -356,22 +357,39 @@ def main():
 
     # Handle single question mode
     if args.question:
+        # If the user requested RamaLama for a single-question invocation,
+        # construct a RamaLama base URL and pass it as the `model` parameter
+        # to ensure we don't fall back to the default cloud model.
+        model_arg = None
+        if args.use_ramalama:
+            # Respect RAMALAMA_PORT env if present, otherwise default to 8080
+            try:
+                port = int(os.environ.get('RAMALAMA_PORT', '8080'))
+            except Exception:
+                port = 8080
+            ramalama = RamaLamaConfig(model_name=args.ramalama_model, port=port)
+            model_arg = ramalama.base_url
+            # Ensure the RAMALAMA model name is visible to create_agent(), which
+            # reads the RAMALAMA_MODEL env var when a base_url is provided.
+            os.environ['RAMALAMA_MODEL'] = args.ramalama_model
+
+        # Prepare kwargs so we can optionally include the model param
+        rq_kwargs = dict(
+            question=args.question,
+            max_iterations=args.max_iterations,
+            min_confidence=args.min_confidence,
+            enable_summarization=(False if args.disable_summarization else True),
+        )
+        if model_arg:
+            rq_kwargs['model'] = model_arg
+
         # Show spinner while waiting for the agent if running in a TTY
         if sys.stdout.isatty():
             with Spinner("Researching (this may take a while)"):
-                result = asyncio.run(research_question(
-                    question=args.question,
-                    max_iterations=args.max_iterations,
-                    min_confidence=args.min_confidence,
-                    enable_summarization=(args.enable_summarization if args.enable_summarization else None)
-                ))
+                result = asyncio.run(research_question(**rq_kwargs))
         else:
-            result = asyncio.run(research_question(
-                question=args.question,
-                max_iterations=args.max_iterations,
-                min_confidence=args.min_confidence,
-                enable_summarization=(args.enable_summarization if args.enable_summarization else None)
-            ))
+            result = asyncio.run(research_question(**rq_kwargs))
+
         display_result(result)
         return
 
@@ -384,7 +402,7 @@ def main():
             args.ramalama_model,
             in_container=args.in_container,
             max_iterations=args.max_iterations,
-            enable_summarization=(args.enable_summarization if args.enable_summarization else None),
+            enable_summarization=(False if args.disable_summarization else True),
         ))
     elif args.mode == "scientific":
         asyncio.run(example_scientific_research())
@@ -395,7 +413,7 @@ def main():
     elif args.mode == "interactive":
         # Pass the CLI summarization flag into interactive mode so the
         # research loop uses summarization when requested.
-        asyncio.run(interactive_mode(enable_summarization=(args.enable_summarization if args.enable_summarization else None)))
+        asyncio.run(interactive_mode(enable_summarization=(False if args.disable_summarization else True)))
     elif args.mode == "all":
         asyncio.run(run_all_examples())
 

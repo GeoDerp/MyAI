@@ -148,6 +148,45 @@ def should_enable_summarization(model: str | None, enable_summarization: Optiona
     return enabled, reason
 
 
+def model_has_large_context(model: str | None) -> bool:
+    """Heuristic: detect if the requested model likely has a very large context window.
+
+    We check both the explicit model string passed to the agent and the
+    RAMALAMA_MODEL env var (if present). This is intentionally heuristic and
+    conservative: if a known large-context model name is present (for
+    example 'granite4' or '1m'), we consider it large and relax summarization.
+    """
+    m = (model or "") + " " + os.environ.get('RAMALAMA_MODEL', '')
+    m = m.lower()
+    # Only treat explicit large-context tokens (for example '1m' style
+    # indicators) as large. Avoid assuming common local model names like
+    # 'granite' or 'granite4' imply a huge context window — many local
+    # builds have standard context sizes (e.g., 4096) and should remain
+    # conservative in summarization.
+    large_indicators = ["1m", "1_000_000", "1m_token", "1mcontext", "1m_context"]
+    for k in large_indicators:
+        if k in m:
+            return True
+    # Some named local models like 'gpt-oss:20b' may still have limited windows
+    return False
+
+
+def summarization_threshold_for_model(model: str | None) -> int:
+    """Return a summarization character threshold appropriate for the model.
+
+    Larger-context models can tolerate much larger thresholds (looser
+    summarization). Small local models need aggressive summarization.
+    """
+    if model_has_large_context(model):
+        return 8000
+    # If using a local endpoint but not a known large model, be conservative
+    ramalama_host = os.environ.get('RAMALAMA_HOST') or os.environ.get('RAMALAMA_PORT')
+    if ramalama_host:
+        return 100
+    # Default for cloud models
+    return 2000
+
+
 
 # ============================================================================
 # Data Models
@@ -203,7 +242,7 @@ class ResearchDependencies:
 
     # Opt-in summarization settings to reduce prompt size for local models
     enable_summarization: bool = False
-    summarization_threshold: int = 800
+    summarization_threshold: int = 100
 
 
 
@@ -248,6 +287,9 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
             "Stop when confidence >= target or max iterations reached."
         )
 
+        # Pass the constructed OpenAIChatModel instance to Agent so it
+        # uses the intended local HTTP provider/model. We'll wrap the
+        # resulting agent model instance to inject request parameters.
         agent = Agent(
             model_obj,
             deps_type=ResearchDependencies,
@@ -255,6 +297,11 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
             retries=2,
             instructions=short_instructions,
         )
+        # Note: we previously attempted to wrap the agent model to inject
+        # provider-specific request parameters (e.g. context-shift). That
+        # approach caused attribute errors in some pydantic-ai versions, so
+        # we avoid wrapping the model and instead rely on aggressive
+        # summarization and truncation to keep prompt sizes small.
     else:
         # Non-HTTP model string (e.g., provider:model). Let the Agent infer
         # the provider from the model string and use the default, more
@@ -284,12 +331,11 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
             results = await func(ctx, query)
         else:
             results = await func(query)
-        # If results are long, either summarize (if enabled) or truncate
-        if isinstance(results, str) and len(results) > ctx.deps.summarization_threshold:
-            if ctx.deps.enable_summarization:
-                results = summarize_text(results, ctx.deps.summarization_threshold)
-            else:
-                results = results[: ctx.deps.summarization_threshold] + "... [truncated]"
+        # Aggressively summarize outputs to keep prompts tiny (always apply)
+        try:
+            results = summarize_text(str(results), ctx.deps.summarization_threshold)
+        except Exception:
+            results = (str(results)[: ctx.deps.summarization_threshold]) + "... [truncated]"
         return f"Web search results for '{query}':\n{results}"
 
     @agent.tool
@@ -312,6 +358,10 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
             model_id=os.environ.get('RAMALAMA_MODEL','local')
         )
         print("📚 Recorded source:", title, "(confidence:", confidence, "/10)")
+        # Keep collected sources bounded to avoid huge provenance/history
+        max_sources = 4
+        if len(ctx.deps.sources_collected) > max_sources:
+            ctx.deps.sources_collected = ctx.deps.sources_collected[-max_sources:]
         return f"Source recorded. Total sources: {len(ctx.deps.sources_collected)}"
 
 
@@ -323,15 +373,21 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
         next_action: str,
         confidence: int
     ) -> str:
+        # Truncate long fields to avoid growing the agent message history
+        max_thought_len = 100
         thought = ResearchThought(
-            observation=observation,
-            analysis=analysis,
-            next_action=next_action,
-            confidence=confidence
+            observation=(observation or "")[:max_thought_len],
+            analysis=(analysis or "")[:max_thought_len],
+            next_action=(next_action or "")[:max_thought_len],
+            confidence=confidence,
         )
         # Each recorded thought represents one iteration. Increment here
         ctx.deps.iteration_count += 1
         ctx.deps.thoughts.append(thought)
+        # Keep only the most recent thoughts to limit context size
+        max_thoughts = 3
+        if len(ctx.deps.thoughts) > max_thoughts:
+            ctx.deps.thoughts = ctx.deps.thoughts[-max_thoughts:]
         print("💭 Iteration", ctx.deps.iteration_count, ": Confidence", f"{confidence}/10")
         print("   Next:", next_action)
         should_stop = (
@@ -351,12 +407,12 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
         print("📄 Searching academic sources:", topic)
 
         def fallback(topic_inner: str):
+            import asyncio
             tool = _get_duckduckgo_tool()(max_results=3)
             func = tool.function
             # shim synchronous fallback for simplicity
             if getattr(tool, 'takes_ctx', False):
                 # Note: this branch is unlikely in the duckduckgo tool; prefer the other
-                import asyncio
                 return asyncio.get_event_loop().run_until_complete(func(ctx, topic_inner))
             return asyncio.get_event_loop().run_until_complete(func(topic_inner))
 
@@ -367,7 +423,7 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
             import myai.academic_retrieval as academic_retrieval
             candidates = academic_retrieval.search_with_fallback(
                 topic,
-                max_results=5,
+                max_results=4,
                 min_year=None,
                 prefer_peer_review=True,
                 prefer_oa=True,
@@ -409,16 +465,22 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
                 line += f" (DOI: {doi})"
             if url:
                 line += f" {url}"
-            if summary and isinstance(summary, str) and len(summary) > 200:
-                if ctx.deps.enable_summarization:
+            # Ensure each candidate summary is short
+            if summary and isinstance(summary, str):
+                try:
                     summary = summarize_text(summary, ctx.deps.summarization_threshold)
-                else:
+                except Exception:
                     summary = summary[: ctx.deps.summarization_threshold] + "... [truncated]"
             if summary:
                 line += f"\n    {summary}"
             out_lines.append(line)
 
         results = "\n".join(out_lines)
+        # Ensure the returned academic results are compact
+        try:
+            results = summarize_text(results, ctx.deps.summarization_threshold)
+        except Exception:
+            results = results[: ctx.deps.summarization_threshold] + "... [truncated]"
         return f"Academic search results for '{topic}':\n{results}"
 
     @agent.tool
@@ -463,11 +525,11 @@ def create_agent(model: str = "openai:gpt-4o") -> Agent:
             results = await func(ctx, query)
         else:
             results = await func(query)
-        if isinstance(results, str) and len(results) > ctx.deps.summarization_threshold:
-            if ctx.deps.enable_summarization:
-                results = summarize_text(results, ctx.deps.summarization_threshold)
-            else:
-                results = results[: ctx.deps.summarization_threshold] + "... [truncated]"
+        # Aggressively condense documentation results
+        try:
+            results = summarize_text(str(results), ctx.deps.summarization_threshold)
+        except Exception:
+            results = str(results)[: ctx.deps.summarization_threshold] + "... [truncated]"
         return f"Documentation search for '{technology} {topic}':\n{results}"
 
     return agent
@@ -604,7 +666,7 @@ async def research_question(
     max_iterations: int = 10,
     min_confidence: int = 8,
     model: str = "openai:gpt-4o",
-    enable_summarization: Optional[bool] = None,
+    enable_summarization: Optional[bool] = True,
 ) -> FinalAnswer:
     """
     Research a question with iterative refinement until high confidence.
@@ -621,7 +683,15 @@ async def research_question(
     print("\n" + "="*80)
     print("🔬 RESEARCH AGENT STARTING")
     print("" + "="*80)
-    print(f"Question: {question}")
+    # If summarization is enabled, create a short version of the question
+    short_question = question
+    # We'll summarize long questions to avoid bloating the initial prompt
+    if enable_summarization:
+        try:
+            short_question = summarize_text(question, 300)
+        except Exception:
+            short_question = question[:300] + '...'
+    print(f"Question: {short_question}")
     print(f"Max iterations: {max_iterations}")
     print(f"Target confidence: {min_confidence}/10")
     print(f"{'='*80}\n")
@@ -630,27 +700,51 @@ async def research_question(
         max_iterations=max_iterations,
         min_confidence=min_confidence
     )
-    # Determine summarization behavior. If the caller explicitly set
-    # enable_summarization (True/False), use that. If it's None, enable
-    # summarization heuristically for local RamaLama / small models to
-    # avoid exceeding model context windows.
-    # Decide whether summarization should be enabled and log the choice so
-    # users can see whether it was an explicit override or a heuristic.
+    # Determine summarization behavior and threshold appropriate for model
     chosen, reason = should_enable_summarization(model, enable_summarization)
     deps.enable_summarization = chosen
-    logger.info("Summarization enabled=%s (%s)", chosen, reason)
+    # allow model-specific relaxation of summarization thresholds
+    deps.summarization_threshold = summarization_threshold_for_model(model)
+    logger.info("Summarization enabled=%s (%s); threshold=%s", chosen, reason, deps.summarization_threshold)
+    # Also print to stdout so container logs show the detected model and threshold
+    print(
+        f"Detected model param: {model}; RAMALAMA_MODEL env: {os.environ.get('RAMALAMA_MODEL')}; "
+        f"summarization_enabled={deps.enable_summarization}; summarization_threshold={deps.summarization_threshold}"
+    )
     
     # Create agent for requested model (OpenAI by default or a ramalama URL)
     agent = create_agent(model)
 
+    # Log the agent's model/provider to make it explicit in runtime logs
+    try:
+        model_repr = getattr(agent.model, 'model_name', repr(agent.model))
+    except Exception:
+        model_repr = repr(agent.model)
+    print(f"[INFO] Agent created. Model/provider: {model_repr}")
+
     # Select a concise prompt when using a local RamaLama HTTP endpoint to
     # avoid exceeding the model's context window on smaller local models.
+    # If using a local endpoint, further cap iterations and shorten the prompt
     if isinstance(model, str) and model.startswith(('http://', 'https://')):
+        # For local HTTP endpoints (RamaLama), be conservative up-front to
+        # avoid exceeding the model's context window. Enable summarization,
+        # lower thresholds, and cap iterations and prompt length.
+        deps.enable_summarization = True
+        # Ensure summarization threshold is small enough for local models
+        deps.summarization_threshold = min(deps.summarization_threshold, 200)
+
+        # Cap iterations to keep the agent's history short on small models
+        if max_iterations and max_iterations > 3:
+            max_iterations = 3
+            deps.max_iterations = 3
+
+        # Cap the question portion used in the prompt to a conservative length
+        if deps.enable_summarization:
+            q_for_prompt = (short_question or "")[:200]
+        else:
+            q_for_prompt = (question or "")[:200]
         prompt = (
-            f"Research: {question}\n"
-            f"Use tools: web_search, analyze_source, record_thought.\n"
-            f"After each step, record a short thought with confidence (0-10) and next action.\n"
-            f"Stop when confidence >= {min_confidence} or iterations >= {max_iterations}."
+            f"Research: {q_for_prompt}. Stop when confidence >= {min_confidence} or iterations >= {max_iterations}."
         )
     else:
         prompt = (
@@ -669,7 +763,46 @@ async def research_question(
         )
 
     # Run the agent - it will loop internally via tools
-    result = await agent.run(prompt, deps=deps)
+    try:
+        result = await agent.run(prompt, deps=deps)
+    except Exception as e:
+        # If the model rejects the request due to context size, attempt
+        # a conservative retry with much more aggressive summarization and
+        # a shorter prompt. This helps local models with smaller context
+        # windows (e.g. some RamaLama-served models).
+        from pydantic_ai.exceptions import ModelHTTPError
+        import traceback
+
+        if isinstance(e, ModelHTTPError) and getattr(e, 'status_code', None) == 400:
+            body = getattr(e, 'body', {}) or {}
+            msg = body.get('message', '') if isinstance(body, dict) else str(body)
+            if 'context' in msg.lower() or 'exceed' in msg.lower():
+                print('\n[WARN] Model rejected request due to context size. Retrying with aggressive summarization and shorter prompt...')
+                # Tighten summarization and shorten prompt
+                deps.enable_summarization = True
+                deps.summarization_threshold = min(200, max(50, int(deps.summarization_threshold // 4)))
+                # Reduce iterations to keep history small
+                deps.max_iterations = min(3, deps.max_iterations)
+                deps.iteration_count = 0
+
+                # Build a very short prompt to reduce tokens
+                very_short_q = (short_question or question)[:120]
+                if isinstance(model, str) and model.startswith(('http://', 'https://')):
+                    retry_prompt = f"Research: {very_short_q}. Stop when confidence >= {min_confidence}. Keep answers concise."
+                else:
+                    retry_prompt = f"Research concisely: {very_short_q}. Stop when confidence >= {min_confidence}."
+
+                try:
+                    result = await agent.run(retry_prompt, deps=deps)
+                except Exception:
+                    # If retry fails, re-raise the original exception for visibility
+                    print('[ERROR] Retry after context-size failure also failed:')
+                    traceback.print_exc()
+                    raise
+            else:
+                raise
+        else:
+            raise
     
     # Add collected sources to the final answer
     final = result.output
@@ -696,10 +829,11 @@ def research_question_sync(
     question: str,
     max_iterations: int = 10,
     min_confidence: int = 8,
-    model: str = "openai:gpt-4o"
+    model: str = "openai:gpt-4o",
+    enable_summarization: Optional[bool] = True,
 ) -> FinalAnswer:
     """Synchronous wrapper for research_question"""
-    return asyncio.run(research_question(question, max_iterations, min_confidence, model))
+    return asyncio.run(research_question(question, max_iterations, min_confidence, model, enable_summarization))
 
 
 

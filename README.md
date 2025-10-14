@@ -153,7 +153,8 @@ user network and point the agent at the RamaLama container by name.
 podman network create myai-net
 
 # Start RamaLama on that network (host container will be reachable as 'ramalama')
-ramalama serve  --network=myai-net --port 8080 --name research-agent-gpt-oss gpt-oss:20b
+ramalama serve --network=myai-net --port 8080 --name research-agent granite4:small-h
+#some usefull arguments --ngl 0 --image quay.io/ramalama/intel-gpu:latest 
 
 # Optional: run Redis on the same network (recommended for production caching)
 podman run -d --name myai-redis --network=myai-net \
@@ -164,11 +165,11 @@ podman run -d --name myai-redis --network=myai-net \
 podman build . -t myai-ramalama
 podman run --rm -it --network=myai-net \
     --env RAMALAMA_PORT=8080 \
-    --env RAMALAMA_MODEL=gpt-oss:20b \
+    --env RAMALAMA_MODEL=granite4:small-h \
     --env REDIS_URL=redis://myai-redis:6379/0 \
-    --env RAMALAMA_HOST=research-agent-gpt-oss \
+    --env RAMALAMA_HOST=research-agent \
     localhost/myai-ramalama:latest \
-    --use-ramalama --ramalama-model gpt-oss:20b \
+    --use-ramalama --ramalama-model granite4:small-h \
     --mode interactive --question "why is the sky blue"
 
 Note: 
