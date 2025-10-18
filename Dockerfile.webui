@@ -1,15 +1,7 @@
-# UBI9-based Dockerfile for running this project's interactive CLI
-# - Uses UBI9 minimal base
-# - Installs Python 3.9 and pip
-# - Copies the repository into /app and installs python deps if present
-# - Runs as non-root user and defaults to an interactive shell so you can
-#   run the CLI and connect to a separate ramalama host container.
-
 FROM registry.access.redhat.com/ubi9/ubi-minimal:9.3
 
 LABEL maintainer="GeoDerp"
 
-# Install basic tools & bash for an interactive shell
 RUN microdnf -y update \
  && microdnf -y install bash git tar podman \
  && microdnf clean all
@@ -40,9 +32,6 @@ ENV PATH=$HOME/.local/bin:$PATH
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 RUN $HOME/.local/bin/uv sync --dev
 
-# Run the packaged example using the venv python directly. Using uv as the
-# entrypoint causes uv to perform sync/pip actions on start which can emit
-# noise and interfere with tty/stdin behavior; running the venv python is
-# simpler and more predictable for an interactive CLI inside a container.
-ENTRYPOINT ["uv", "run", "research-agent", "--in-container"]
-CMD ["--mode", "interactive"]
+EXPOSE 8081
+
+ENTRYPOINT ["uv", "run", "webui.py"]

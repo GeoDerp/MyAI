@@ -141,7 +141,7 @@ can reach it by hostname inside a user-defined network.
 ramalama serve gpt-oss:20b --port 8080 --name research-agent-gpt-oss -d
 ```
 
-2. Run the agent container and tell it to use RamaLama.
+2.  Run the agent container and tell it to use RamaLama.
 
 When the agent runs inside a container and `--use-ramalama` is passed, it
 assumes an OpenAI-compatible HTTP endpoint is available at the configured
@@ -212,6 +212,28 @@ pip install ramalama
 ramalama pull granite
 python research_agent_example.py --use-ramalama --ramalama-model granite
 ```
+
+## Web UI
+
+A simple web UI is available to interact with the research agent.
+
+### Running the Web UI
+
+1.  **Build the Docker image:**
+
+    ```bash
+    podman build -f Dockerfile.webui -t myai-webui
+    ```
+
+2.  **Run the container:**
+
+    ```bash
+    podman run -p 8081:8081 --rm -it myai-webui
+    ```
+
+3.  **Open your browser:**
+
+    Navigate to `http://localhost:8081` to use the web UI.
 
 ## Usage Examples
 

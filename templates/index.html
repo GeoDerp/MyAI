@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Research Agent</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8fafc;
+            font-family: 'Poppins', sans-serif;
+        }
+        .container {
+            max-width: 900px;
+        }
+        .form-group label {
+            font-weight: 500;
+            color: #4a5568;
+        }
+        .form-group input[type="text"], .form-group input[type="number"] {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.375rem;
+            transition: border-color 0.2s ease-in-out;
+        }
+        .form-group input[type="text"]:focus, .form-group input[type="number"]:focus {
+            outline: none;
+            border-color: #4299e1;
+            box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.5);
+        }
+        .form-group input[type="checkbox"] {
+            margin-right: 0.5rem;
+        }
+        .btn-primary {
+            background-color: #4299e1;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .btn-primary:hover {
+            background-color: #3182ce;
+        }
+        .result-card {
+            background-color: white;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 2rem;
+            margin-top: 2.5rem;
+        }
+        .result-card h2 {
+            color: #2d3748;
+            font-size: 1.75rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+        .result-card h3 {
+            color: #4a5568;
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+        }
+        .source {
+            background-color: #f7fafc;
+            border-left: 4px solid #4299e1;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            border-radius: 0.375rem;
+        }
+        .source strong {
+            color: #2b6cb0;
+        }
+        .source a {
+            color: #2b6cb0;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .source a:hover {
+            text-decoration: underline;
+        }
+        /* Loading Spinner Styles */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            display: none; /* Hidden by default */
+        }
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background-color: #4299e1;
+            animation: pulse 1.5s infinite ease-in-out;
+        }
+        @keyframes pulse {
+            0% {
+                transform: scale(0);
+                opacity: 1;
+            }
+            50% {
+                transform: scale(1);
+                opacity: 0.5;
+            }
+            100% {
+                transform: scale(0);
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+<body class="p-8">
+    <div class="container mx-auto bg-white p-10 rounded-xl shadow-md">
+        <h1 class="text-4xl font-bold text-center text-gray-800 mb-10">Research Agent</h1>
+        <form method="POST" class="space-y-6" id="research-form">
+            <div class="form-group">
+                <label for="question" class="block text-gray-700">Question</label>
+                <input type="text" name="question" id="question" class="mt-1 block w-full px-4 py-3 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" placeholder="Enter your research question" value="{{ request.form.question if request else '' }}">
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="form-group">
+                    <label for="max_iterations" class="block text-gray-700">Max Iterations</label>
+                    <input type="number" name="max_iterations" id="max_iterations" class="mt-1 block w-full px-4 py-3 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" value="{{ request.form.max_iterations if request else 10 }}">
+                </div>
+                <div class="form-group">
+                    <label for="min_confidence" class="block text-gray-700">Min Confidence</label>
+                    <input type="number" name="min_confidence" id="min_confidence" class="mt-1 block w-full px-4 py-3 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" value="{{ request.form.min_confidence if request else 8 }}">
+                </div>
+            </div>
+            <div class="form-group flex items-center">
+                <input type="checkbox" name="use_ramalama" id="use_ramalama" class="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300 rounded" {{ 'checked' if request and request.form.get('use_ramalama') }}>
+                <label for="use_ramalama" class="ml-2 block text-gray-900">Use RamaLama</label>
+            </div>
+            <div class="form-group">
+                <label for="ramalama_host" class="block text-gray-700">RamaLama Host IP</label>
+                <input type="text" name="ramalama_host" id="ramalama_host" class="mt-1 block w-full px-4 py-3 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" placeholder="e.g., 192.168.1.100 or localhost" value="{{ request.form.ramalama_host if request else '' }}">
+            </div>
+            <div class="form-group">
+                <label for="ramalama_model" class="block text-gray-700">RamaLama Model</label>
+                <input type="text" name="ramalama_model" id="ramalama_model" class="mt-1 block w-full px-4 py-3 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" value="{{ request.form.ramalama_model if request else 'granite4:small-h' }}">
+            </div>
+            <div class="form-group flex items-center">
+                <input type="checkbox" name="enable_summarization" id="enable_summarization" class="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300 rounded" {{ 'checked' if request and request.form.get('enable_summarization') }}>
+                <label for="enable_summarization" class="ml-2 block text-gray-900">Enable Summarization</label>
+            </div>
+            <button type="submit" class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Research</button>
+        </form>
+
+        {% if result %}
+        <div class="result-card">
+            <h2 class="text-2xl font-bold text-gray-800">Answer</h2>
+            <p class="mt-2 text-gray-700">{{ result.answer }}</p>
+            <p class="mt-4 text-gray-600"><strong>Confidence:</strong> {{ result.confidence }}/10 ({{ result.certainty_level }})</p>
+            <h3 class="text-xl font-semibold text-gray-800">Reasoning</h3>
+            <p class="mt-2 text-gray-700">{{ result.reasoning }}</p>
+            {% if result.evidence %}
+            <div class="evidence mt-6">
+                <h3 class="text-xl font-semibold text-gray-800">Evidence ({{ result.evidence | length }} sources)</h3>
+                <div class="space-y-4 mt-4">
+                    {% for source in result.evidence %}
+                    <div class="source">
+                        <p class="text-lg font-medium">{{ source.title }}</p>
+                        <p class="text-sm text-gray-600">Confidence: {{ source.confidence }}/10</p>
+                        <p class="mt-2 text-gray-700">{{ source.content }}</p>
+                        {% if source.url %}
+                        <a href="{{ source.url }}" target="_blank" class="text-blue-600 hover:underline">Read more</a>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="spinner"></div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const ramalamaHostInput = document.getElementById('ramalama_host');
+            const ramalamaModelInput = document.getElementById('ramalama_model');
+            const useRamalamaCheckbox = document.getElementById('use_ramalama');
+            const enableSummarizationCheckbox = document.getElementById('enable_summarization');
+            const researchForm = document.getElementById('research-form');
+            const loadingOverlay = document.getElementById('loading-overlay');
+
+            // Load saved values from localStorage
+            if (localStorage.getItem('ramalama_host')) {
+                ramalamaHostInput.value = localStorage.getItem('ramalama_host');
+            }
+            if (localStorage.getItem('ramalama_model')) {
+                ramalamaModelInput.value = localStorage.getItem('ramalama_model');
+            }
+            if (localStorage.getItem('use_ramalama') === 'true') {
+                useRamalamaCheckbox.checked = true;
+            }
+            if (localStorage.getItem('enable_summarization') === 'true') {
+                enableSummarizationCheckbox.checked = true;
+            }
+
+            // Save values to localStorage on input change
+            ramalamaHostInput.addEventListener('input', function() {
+                localStorage.setItem('ramalama_host', this.value);
+            });
+            ramalamaModelInput.addEventListener('input', function() {
+                localStorage.setItem('ramalama_model', this.value);
+            });
+            useRamalamaCheckbox.addEventListener('change', function() {
+                localStorage.setItem('use_ramalama', this.checked);
+            });
+            enableSummarizationCheckbox.addEventListener('change', function() {
+                localStorage.setItem('enable_summarization', this.checked);
+            });
+
+            // Show loading overlay on form submission
+            researchForm.addEventListener('submit', function() {
+                loadingOverlay.style.display = 'flex';
+            });
+
+            // Hide loading overlay when the page finishes loading (after form submission)
+            window.addEventListener('load', function() {
+                loadingOverlay.style.display = 'none';
+            });
+        });
+    </script>
+</body>
+</html>

@@ -17,6 +17,7 @@ dependencies = [
     "redis>=4.6.0",
     "ddgs>=1.0.0",
     "pydantic>=2.12.0",
+    "flask>=2.3.0",
 ]
 
 [project.optional-dependencies]

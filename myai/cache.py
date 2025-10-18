@@ -173,10 +173,20 @@ def summarize_document_with_content(
     max_tokens. If a cached summary exists it is returned. Otherwise a placeholder
     summary is created and saved.
     """
+    # New options for chunking/condensation. These can be overridden via
+    # condensation_config or passed in to control behavior.
+    chunk_size_tokens = int(condensation_config.get("chunk_size_tokens", 1000))
+    chunk_overlap_tokens = int(condensation_config.get("chunk_overlap_tokens", 100))
+    per_chunk_summary_tokens = int(condensation_config.get("per_chunk_summary_tokens", 300))
+    condense_strategy = condensation_config.get("condense_strategy", "extractive")
+    force_recompute = bool(condensation_config.get("force_recompute", False))
+
     content_hash = ""
     if source_text:
         content_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
 
+    # Fingerprint includes chunking & strategy parameters so different
+    # condensation configs produce distinct cached entries.
     fingerprint = make_fingerprint(
         doi,
         model_id or "",
@@ -184,17 +194,22 @@ def summarize_document_with_content(
         content_hash,
         json.dumps(condensation_config, sort_keys=True),
         str(max_tokens),
+        str(chunk_size_tokens),
+        str(chunk_overlap_tokens),
+        str(per_chunk_summary_tokens),
+        str(condense_strategy),
     )
 
-    existing = cache_get(fingerprint)
-    if existing:
-        return existing
+    if not force_recompute:
+        existing = cache_get(fingerprint)
+        if existing:
+            return existing
 
-    # Use extractive summarization to produce a condensed summary and meta.
+    # Prefer local extractive summarizer
     try:
-        from .condense import extractive_summarize
+        from .condense import extractive_summarize, split_sentences, estimate_tokens
     except Exception:
-        # fallback to placeholder if condense module unavailable
+        # fallback to previous placeholder behavior if condense module unavailable
         summary_text = (
             f"[condensed summary for {doi} | model={model_id} | prompt_fp={prompt_fingerprint} | content_hash={content_hash[:8]}]"
         )
@@ -213,20 +228,88 @@ def summarize_document_with_content(
         out["fingerprint"] = fingerprint
         return out
 
-    # If we have source_text, condense it; otherwise use DOI metadata as placeholder
-    source = source_text or ""
-    summary_text, summ_meta = extractive_summarize(source, max_tokens)
+    # If there's no source text, keep the old placeholder behavior
+    if not source_text:
+        summary_text, summ_meta = extractive_summarize("", max_tokens)
+        out = {
+            "doi": doi,
+            "summary": summary_text,
+            "meta": {
+                "config": condensation_config,
+                "max_tokens": max_tokens,
+                "model_id": model_id,
+                "prompt_fingerprint": prompt_fingerprint,
+                "content_hash": content_hash,
+                "summarizer": condense_strategy,
+                **summ_meta,
+            },
+        }
+        cache_set(fingerprint, out)
+        out["fingerprint"] = fingerprint
+        return out
+
+    # Chunk the source_text into chunks of ~chunk_size_tokens (using sentence boundaries)
+    sentences = split_sentences(source_text)
+    chunks: list[str] = []
+    current: list[str] = []
+    current_tokens = 0
+
+    for i, s in enumerate(sentences):
+        t = estimate_tokens(s)
+        # If single sentence larger than chunk_size, still include it
+        if current_tokens + t > chunk_size_tokens and current:
+            chunks.append(" ".join(current))
+            # prepare next chunk with overlap
+            if chunk_overlap_tokens > 0:
+                # include trailing sentences to create overlap
+                overlap = []
+                overlap_tokens = 0
+                # walk backwards through current to add overlap until tokens reached
+                for ss in reversed(current):
+                    overlap_tokens += estimate_tokens(ss)
+                    if overlap_tokens > chunk_overlap_tokens:
+                        break
+                    overlap.insert(0, ss)
+                current = overlap.copy()
+                current_tokens = sum(estimate_tokens(x) for x in current)
+            else:
+                current = []
+                current_tokens = 0
+
+        current.append(s)
+        current_tokens += t
+
+    if current:
+        chunks.append(" ".join(current))
+
+    chunk_summaries: list[dict] = []
+    for idx, ch in enumerate(chunks):
+        # Condense each chunk to per_chunk_summary_tokens using extractive summarizer
+        summ_text, summ_meta = extractive_summarize(ch, per_chunk_summary_tokens)
+        chunk_summaries.append({
+            "index": idx,
+            "orig_tokens": estimate_tokens(ch),
+            "summary": summ_text,
+            "meta": summ_meta,
+        })
+
+    # Combine chunk summaries and perform a final condensation to fit max_tokens
+    combined = "\n".join(c.get("summary", "") for c in chunk_summaries)
+    final_summary, final_meta = extractive_summarize(combined, max_tokens)
+
     out = {
         "doi": doi,
-        "summary": summary_text,
+        "summary": final_summary,
         "meta": {
             "config": condensation_config,
             "max_tokens": max_tokens,
             "model_id": model_id,
             "prompt_fingerprint": prompt_fingerprint,
             "content_hash": content_hash,
-            "summarizer": "extractive",
-            **summ_meta,
+            "summarizer": condense_strategy,
+            "chunk_count": len(chunks),
+            "chunks": chunk_summaries,
+            **final_meta,
         },
     }
     cache_set(fingerprint, out)
