@@ -1,74 +1,67 @@
-# Personal Research Agent 🔬
+# Deep Research Agent 🔬
 
-A sophisticated research agent built with [Pydantic AI](https://github.com/pydantic/pydantic-ai), [RamaLama](https://github.com/containers/ramalama), and ethical open-source tools. This agent iteratively researches questions using web search, academic papers, and documentation until it achieves high confidence in its answers.
+A production-ready, academically rigorous Deep Research Agent built with a Hybrid Agent Architecture. This agent employs a sophisticated research methodology to deliver comprehensive, evidence-based answers.
 
 ## Features ✨
 
-- **🔄 Iterative Research Loop**: Continues searching and refining until reaching high confidence (8+/10)
-- **📚 Multiple Information Sources**: Web search, academic papers, technical documentation
-- **🎯 Evidence-Based Answers**: Collects and cites sources with confidence levels
-- **🧠 Transparent Reasoning**: Shows thinking process and iteration progress
-- **🐳 Local Model Support**: Works with RamaLama-served models (no API keys needed!)
-- **⚡ Fast or Powerful**: Choose from lightweight to powerful models based on needs
-- **🔒 Ethical & Open**: Uses open-source tools and models where possible
+- **🧠 Hybrid Agent Architecture**: Combines the strengths of LangGraph, the STORM research framework, and specialized tools.
+- **🔄 Deterministic & State-Managed Execution**: LangGraph ensures reliable, iterative research tasks.
+- **📚 Rigorous Research Methodology**: Implements the STORM framework for comprehensive, multi-perspective question asking.
+- **� LLM Sovereignty**: Supports self-hosted models via Ollama and `litellm` for maximum model choice and cost control.
+- **🛠️ Specialized Tooling**: Integrates LlamaParse for PDF ingestion, Exa API for semantic search, and the Arxiv API for academic research.
+- **� Production-Ready**: Served via a FastAPI application and containerized with Docker.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│              Research Agent (Pydantic AI)           │
+│              Deep Research Agent API (FastAPI)      │
+└─────────────────────────────────────────────────────┘
+                      │
+┌─────────────────────────────────────────────────────┐
+│              Orchestration (LangGraph)              │
 │  ┌────────────────────────────────────────────┐    │
-│  │  Core Loop (until confidence >= 8/10)      │    │
-│  │  1. Search web/papers/docs                 │    │
-│  │  2. Analyze and record sources             │    │
-│  │  3. Update confidence level                │    │
-│  │  4. Determine next action                  │    │
-│  │  5. Repeat if needed                       │    │
+│  │  STORM Research Loop                       │    │
+│  │  1. Plan Research                          │    │
+│  │  2. Gather Information (Exa, Arxiv)        │    │
+│  │  3. Process Content (LlamaParse)           │    │
+│  │  4. Synthesize Report                      │    │
+│  │  5. Reflect and Refine                     │    │
 │  └────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────┘
                       │
-                      ├─────► DuckDuckGo Search (Web)
-                      ├─────► Academic Papers (arXiv, PubMed)
-                      ├─────► Documentation Sites
-                      └─────► LLM (OpenAI or RamaLama)
+                      ├─────► LlamaParse (PDFs)
+                      ├─────► Exa API (Semantic Search)
+                      ├─────► Arxiv API (Academic Papers)
+                      └─────► LLM (litellm -> Ollama)
                                     │
-                                    └─► Local models via RamaLama
-                                        (granite, deepseek, etc.)
+                                    └─► Self-hosted models (Llama 3, etc.)
 ```
 
 ## Installation
 
 ### 1. Install with uv (recommended)
 
-Use Astral's `uv` as the project manager for fast, reproducible installs. Install `uv` (one-time), then create the project environment and install dependencies:
+Use Astral's `uv` as the project manager for fast, reproducible installs.
 
 ```bash
 # Install uv (one-time)
-# Option A: standalone installer (macOS / Linux)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Option B: with pip (user or inside a small bootstrap venv)
-python3 -m pip install --user uv
-
-# From the project root, create/ensure the project venv and install dependencies
-cd /var/home/geo/Documents/MyAi
-uv venv
-uv sync   # install from pyproject.toml / lockfile
-
-# You can also add packages interactively
-uv add pydantic_ai duckduckgo-search
+# From the project root, create the project venv and install dependencies
+uv sync
 ```
 
-If you prefer the classic venv+pip workflow, the old commands still work (install the package from the current directory):
+### 2. Set Up API Keys
+
+This project requires API keys for LlamaParse and Exa.
 
 ```bash
-cd /var/home/geo/Documents/MyAi
-python3 -m venv venv
-source venv/bin/activate
-pip install .
+export LLAMA_CLOUD_API_KEY="your-llama-cloud-api-key"
+export EXA_API_KEY="your-exa-api-key"
 ```
 
-### 2. Install RamaLama (Optional - for local models)
+### 3. Install RamaLama (Optional - for local models)
 
 #### On Linux:
 ```bash
@@ -83,21 +76,40 @@ sudo dnf install ramalama
 sudo apt install ramalama
 ```
 
-#### Verify Installation:
+## Running the Agent
+
+### 1. Start the API Server
+
 ```bash
-ramalama --version
+uvicorn myai.api:app --reload
 ```
 
-### 3. Set Up API Keys (if using cloud models)
+The API will be available at `http://localhost:8000`.
 
-For OpenAI:
-```bash
-export OPENAI_API_KEY="your-api-key-here"
+### 2. Use the API
+
+You can send a POST request to the `/research` endpoint with a JSON body:
+
+```json
+{
+  "topic": "The future of AI in scientific discovery"
+}
 ```
 
-For Anthropic:
+### 3. Use Docker
+
+Build and run the Docker container:
+
 ```bash
-export ANTHROPIC_API_KEY="your-api-key-here"
+docker build -t deep-research-agent .
+# Run API server (default)
+docker run -p 8000:8000 -e LLAMA_CLOUD_API_KEY -e EXA_API_KEY deep-research-agent
+
+# Run interactive CLI inside the container (ask questions from the prompt)
+docker run -it --rm deep-research-agent cli
+
+# Run the lightweight web UI (serves templates/index.html on port 8081)
+docker run -p 8081:8081 --rm deep-research-agent webui
 ```
 
 For Google:
@@ -153,7 +165,7 @@ user network and point the agent at the RamaLama container by name.
 podman network create myai-net
 
 # Start RamaLama on that network (host container will be reachable as 'ramalama')
-ramalama serve  --ngl 0 --image quay.io/ramalama/intel-gpu:latest  --network=myai-net --port 8080 --name research-agent granite4:small-h
+ramalama serve --network=myai-net --port 8080 --name research-agent granite4:small-h
 #some usefull arguments --ngl 0 --image quay.io/ramalama/intel-gpu:latest 
 
 # Optional: run Redis on the same network (recommended for production caching)
@@ -215,7 +227,14 @@ python research_agent_example.py --use-ramalama --ramalama-model granite
 
 ## Web UI
 
-A simple web UI is available to interact with the research agent.
+A production-ready web UI with **background task support** is available to interact with the research agent.
+
+### Key Features
+
+- **Background Tasks**: Run long research jobs in the background and check back later
+- **Task Status API**: Poll task status via `/status/<task_id>` endpoint
+- **Automatic HTML Export**: Results saved to `/tmp/research_report.html` by default
+- **Provenance Tracking**: Automatically writes provenance bundles alongside results
 
 ### Running the Web UI
 
@@ -228,12 +247,204 @@ A simple web UI is available to interact with the research agent.
 2.  **Run the container:**
 
     ```bash
-    podman run -p 8081:8081 --rm -it myai-webui
+        # Recommended: create a user network so the agent container can reach RamaLama by name
+        podman network create myai-net || true
+
+        # Run the web UI on the same network as your RamaLama server. The web UI listens on 8081.
+        podman run -d --name myai-webui --network myai-net -p 8081:8081 myai-webui
     ```
 
 3.  **Open your browser:**
 
     Navigate to `http://localhost:8081` to use the web UI.
+
+### Using Background Tasks
+
+The web UI now supports running research tasks in the background, allowing you to leave and come back when the task is complete.
+
+**To use background mode:**
+1. Enter your research question
+2. Configure settings (iterations, RamaLama options, etc.)
+3. **Check the "Run in background" checkbox**
+4. Submit the form
+
+You'll receive a Task ID and can:
+- Check status at `/status/<task_id>` (returns JSON)
+- View results at `/result/<task_id>` when complete
+- Leave and return anytime - the task continues running
+
+**Example workflow:**
+```bash
+# Submit a background task
+curl -X POST "http://127.0.0.1:8081/" \
+    -F 'question=What is quantum entanglement?' \
+    -F 'max_iterations=10' \
+    -F 'background=on'
+
+# Returns: Task ID = abc-123-def
+
+# Check status
+curl "http://127.0.0.1:8081/status/abc-123-def"
+
+# Get results when complete
+curl "http://127.0.0.1:8081/result/abc-123-def"
+```
+
+Notes about running with a local RamaLama server
+-----------------------------------------------
+- The web UI can target a local RamaLama (OpenAI-compatible) server. Run RamaLama on the same user network so the web UI can reach it by container name. Example (podman):
+
+```bash
+# Start a RamaLama server on the user network and expose its OpenAI-compatible HTTP endpoint
+podman run -d --name research-agent --network myai-net \
+    quay.io/ramalama/intel-gpu:latest \
+    ramalama serve --ngl 0 --image quay.io/ramalama/intel-gpu:latest --port 8080 --name research-agent granite4:small-h
+# (Adjust image/model flags to match the model you pulled.)
+```
+
+- When you submit the form in the web UI and enable "Use RamaLama", point the Host/IP field at the RamaLama container name (for the example above use `research-agent`) and set the port (default 8080). The UI will reconfigure the LLM client at runtime and run the STORM research flow.
+
+What the UI shows
+------------------
+- The web UI now renders structured outputs from the agent: a parsed `Plan` (if the model returned JSON), the `Questions` list, the synthesized `Report`, `Feedback` from a reflection pass, and any `Articles` gathered during the run.
+- For debugging, the web UI container writes traces and normalized assistant content to `/tmp/myai_debug.log` inside the container. If something goes wrong, inspect that file to see the raw model responses, normalized assistant text, and whether an assistant JSON block was detected.
+- **Background tasks**: Task status and results are stored in memory; for production deployments consider using Redis or a persistent task queue.
+
+Quick test (form POST)
+----------------------
+You can exercise the same flow with curl (this mimics the web UI form):
+
+```bash
+curl -v -X POST "http://127.0.0.1:8081/" \
+    -F 'question=Network test to research-agent' \
+    -F 'max_iterations=2' \
+    -F 'use_ramalama=on' \
+    -F 'ramalama_host=research-agent' \
+    -F 'ramalama_port=8080'
+```
+
+If RamaLama is running as `research-agent` on the `myai-net` network the UI will display the parsed plan and the final synthesized report from the model.
+
+Inspect debug traces (inside the web UI container)
+-------------------------------------------------
+If you need to troubleshoot model connectivity or inspect raw LLM outputs, the web UI container writes detailed traces to `/tmp/myai_debug.log`.
+
+Common commands:
+
+```bash
+# Print the whole debug log from the running container:
+podman exec -it myai-webui cat /tmp/myai_debug.log
+
+# Tail the last 200 lines (useful during active testing):
+podman exec -it myai-webui tail -n 200 /tmp/myai_debug.log
+
+# Stream web UI container logs (Flask stdout/stderr):
+podman logs -f myai-webui
+
+# Copy the file from the container onto the host for offline inspection:
+podman cp myai-webui:/tmp/myai_debug.log ./myai_debug.log
+```
+
+## Production deployment
+
+This repository includes a production-friendly `Dockerfile.webui` and a
+`docker-compose.yml` to run the web UI in a containerized environment. The
+entrypoint supports multiple modes and will run the Flask web UI under
+Gunicorn in `webui` mode or the FastAPI app under Uvicorn in `server` mode.
+
+Environment variables
+- PORT: port the process listens on (default: 8081 for webui mode)
+- HOST: network interface to bind to (default: 0.0.0.0)
+- MYAI_DEBUG_FILE: optional path inside container to mirror debug traces (if set, logs are appended to this file in addition to stdout)
+- MYAI_LOG_LEVEL: logging level (DEBUG, INFO, WARNING)
+- **LLM_TIMEOUT**: LLM request timeout in seconds (default: 30)
+- **LLM_RETRIES**: Maximum retry attempts for failed LLM calls (default: 2)
+
+Provenance and integration environment variables
+- `MYAI_PARTIAL_DIR` (optional): directory where the agent writes partial artifacts and provenance bundles when an external provenance store is not configured. Defaults to `/tmp`.
+- `MYAI_RENDERED_OUTPUT` (optional): path to save a rendered HTML copy of web UI results. Defaults to `/tmp/research_report.html`.
+- `LANGGRAPH_URL` (optional): if set, the agent will attempt to persist `ResearchSource` nodes and provenance to a LangGraph instance. If not set, the agent falls back to writing provenance bundles to `MYAI_PARTIAL_DIR`.
+- `TORM_URL` (optional): a TORM service endpoint for multi-perspective question expansion. When absent a deterministic fallback is used.
+- `EXA_API_KEY` (optional): API key for Exa; when present the `academic_retrieval` module may use Exa as a fallback for high-recall retrieval.
+- `RAMALAMA_HOST`, `RAMALAMA_PORT` (optional): host and port for RamaLama (OpenAI-compatible) local model serving. When using the web UI you can toggle "Use RamaLama" and point the host/port at your RamaLama server.
+- `LITELLM_BASE_URL`, `LITELLM_API_KEY` (optional): when using remote litellm-backends these may be used by the LLM manager.
+
+Quick production run using docker-compose:
+
+```bash
+# Build and run the web UI (and optional RamaLama service if enabled)
+podman-compose up -d --build
+
+# Check health
+curl http://localhost:8081/healthz
+
+# View logs
+podman-compose logs -f webui
+```
+
+If you prefer to run the web UI directly with Podman/Docker without compose:
+
+```bash
+# Build the image
+podman build -f Dockerfile.webui -t myai-webui .
+
+# Run the web UI on the myai-net network and map port 8081
+podman network create myai-net || true
+podman run --rm -d --name myai-webui --network myai-net -p 8081:8081 \
+    -e PORT=8081 -e HOST=0.0.0.0 myai-webui webui
+```
+
+Security & production notes
+- Run the container behind a reverse proxy (nginx, Traefik) for TLS and routing.
+- Set resource limits (memory/cpu) appropriate for the model server and agent.
+- Consider mounting a host directory for `MYAI_DEBUG_FILE` to retain logs outside the container.
+
+Provenance behavior (fallback)
+- When a provenance store (LangGraph) is not configured via `LANGGRAPH_URL`, the agent will write a provenance bundle JSON file for each research run into the directory configured by `MYAI_PARTIAL_DIR` (by default `/tmp`). The bundle includes recorded `ResearchSource` metadata, the final synthesized report, iteration logs, and a minimal execution trace to allow auditors to inspect how claims were produced.
+- The web UI also writes a rendered HTML snapshot to `MYAI_RENDERED_OUTPUT` and, as a best-effort action, attempts to write a provenance bundle next to the HTML file or into `MYAI_PARTIAL_DIR` if a provenance store is not available.
+
+Provenance bundle example
+-------------------------
+When LangGraph is not configured the agent writes a provenance bundle JSON file into `MYAI_PARTIAL_DIR`. A minimal example looks like this:
+
+```json
+{
+    "question": "What causes X?",
+    "timestamp": "20250101T123000Z",
+    "sources": [
+        {"title": "Paper A", "url": "https://doi.org/10.x/abc", "fetched_at": "20250101T122900Z", "id": "doi:10.x/abc"}
+    ],
+    "iterations": [
+        {"step": 1, "notes": "searched CrossRef and web"}
+    ],
+    "final_report": "Summary text...",
+    "final_confidence": 7
+}
+```
+
+Quick env var reference
+-----------------------
+
+- `MYAI_PARTIAL_DIR` — directory for provenance bundles and partial outputs (default: `/tmp`).
+- `MYAI_RENDERED_OUTPUT` — HTML snapshot path for the web UI (default: `/tmp/research_report.html`).
+- `LANGGRAPH_URL` — optional LangGraph endpoint for persistent provenance. If set, the agent will attempt to persist sources there; otherwise provenance bundles are written to `MYAI_PARTIAL_DIR`.
+- `TORM_URL` — optional TORM endpoint for question expansion.
+- `EXA_API_KEY` — optional Exa API key used for high-recall retrieval.
+- `RAMALAMA_HOST`, `RAMALAMA_PORT` — host/port for RamaLama local model serving (web UI toggle available).
+
+
+Testing note
+- Unit tests in `tests/` set `MYAI_PARTIAL_DIR` and `MYAI_RENDERED_OUTPUT` to temporary directories so they do not write to `/tmp` during CI runs. If you are running tests locally and want to inspect provenance bundles, set `MYAI_PARTIAL_DIR` to a directory you control.
+
+
+What to look for
+-----------------
+- RAW_RESPONSE: A truncated representation of the full ModelResponse object returned by the LLM client.
+- ASSISTANT_TEXT: A normalized assistant message (code fences stripped) derived from the RAW_RESPONSE.
+- ASSISTANT_JSON_PRESENT: The agent detected a JSON object (usually the `plan`) inside the assistant text and parsed it.
+- Connection warnings / errors: If you see messages like "Could not connect to LLM server" or litellm/InternalServerError traces, confirm the RamaLama container is running and attached to the same network as the web UI (`myai-net`).
+
+If you'd like a convenience helper, see `scripts/show_debug.sh` which prints the last ~250 lines of the debug log from the running web UI container.
 
 ## Usage Examples
 

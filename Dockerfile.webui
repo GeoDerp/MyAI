@@ -1,37 +1,54 @@
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.3
-
+FROM python:3.11-slim AS builder
 LABEL maintainer="GeoDerp"
+ARG DEBIAN_FRONTEND=noninteractive
 
-RUN microdnf -y update \
- && microdnf -y install bash git tar podman \
- && microdnf clean all
-
-# Create a non-root user to run the CLI
-RUN useradd -u 1000 -m appuser || true
+# Install build dependencies only in builder stage
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+	 build-essential curl git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
-# Copy project files. In typical usage you'll mount your workspace over /app
-# during development to avoid rebuilding the image on every change.
 COPY . /app
 
-# Ensure /app is writable by the runtime user so the venv is created with
-# correct ownership and doesn't point into /root.
-RUN chown -R appuser:appuser /app || true
+# Create a root-owned virtualenv and install the project and uv into it
+RUN python3 -m venv /opt/venv
+RUN /opt/venv/bin/pip install --upgrade pip setuptools wheel
+RUN /opt/venv/bin/pip install uv
+# Install the project with dev extras (fall back to plain install if extras missing)
+# Also install gunicorn and uvicorn for production servers.
+RUN /opt/venv/bin/pip install gunicorn uvicorn
+RUN /opt/venv/bin/pip install -e ".[dev]" || /opt/venv/bin/pip install -e .
 
-# Run the remaining setup steps as the non-root runtime user so uv installs
-# into /home/appuser/.local and any created virtualenv references files under
-# /home/appuser instead of /root.
+# Create non-root user and give them ownership of app dir and the venv
+RUN useradd -u 1000 -m appuser || true
+RUN chown -R appuser:appuser /app /opt/venv
+
 USER appuser
+ENV HOME=/home/appuser
+ENV PATH=/opt/venv/bin:$PATH
+
+FROM python:3.11-slim AS runtime
+LABEL maintainer="GeoDerp"
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Minimal runtime; create the same non-root user
+RUN useradd -u 1000 -m appuser || true
+WORKDIR /app
+
+# Copy application files and the root-owned virtualenv created in builder
+COPY --chown=appuser:appuser --from=builder /app /app
+COPY --chown=appuser:appuser --from=builder /opt/venv /opt/venv
 
 ENV HOME=/home/appuser
-ENV PATH=$HOME/.local/bin:$PATH
+ENV PATH=/opt/venv/bin:$PATH
 
-# Install uv (into the appuser's home) and create the virtualenv / install deps.
-# Use POSIX-compatible dot (.) to source the env file in /bin/sh.
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-RUN $HOME/.local/bin/uv sync --dev
+USER appuser
 
+# Make entrypoint executable and expose webui port
+RUN chmod +x /app/scripts/entrypoint.sh || true
 EXPOSE 8081
 
-ENTRYPOINT ["uv", "run", "webui.py"]
+# Use the shared entrypoint and default to webui mode
+ENTRYPOINT ["/app/scripts/entrypoint.sh"]
+CMD ["webui"]

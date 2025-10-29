@@ -210,12 +210,37 @@ def search_with_fallback(
             t = c.get("type") or ""
             if "journal" in t or c.get("DOI"):
                 return ranked
-    # Otherwise fallback
+    # Otherwise fallback: prefer caller-provided fallback_fn; if not present
+    # try Exa adapter when configured; otherwise call fallback_fn if provided.
     if fallback_fn is not None:
         try:
             return fallback_fn(topic)
         except Exception:
             return []
+
+    # If no fallback_fn was provided, attempt to use the optional Exa adapter
+    try:
+        from myai.integrations import exa_search
+        exa_results = exa_search(topic)
+        if exa_results:
+            # Normalize Exa results into candidate dicts similar to CrossRef
+            normalized = []
+            for it in exa_results:
+                normalized.append({
+                    'title': it.get('title'),
+                    'DOI': None,
+                    'URL': it.get('URL') or it.get('url'),
+                    'publisher': None,
+                    'issued': None,
+                    'type': 'web',
+                    'is_oa': True,
+                    'raw': it,
+                })
+            return normalized
+    except Exception:
+        logger.debug('Exa adapter not available or failed')
+
+    return []
     return []
 
 

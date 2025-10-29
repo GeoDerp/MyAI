@@ -57,6 +57,11 @@ Thumbs.db
 htmlcov/
 .tox/
 
+# Caching
+.cache/
+*.pyc
+*.pyo
+
 # MyPy
 .mypy_cache/
 .dmypy.json
@@ -69,6 +74,11 @@ dmypy.json
 research_results/
 *.json
 *.csv
+
+# Temporary files
+*.tmp
+*.bak
+*~
 
 # API keys (extra safety)
 *api_key*

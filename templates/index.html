@@ -155,32 +155,82 @@
                 <input type="checkbox" name="enable_summarization" id="enable_summarization" class="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300 rounded" {{ 'checked' if request and request.form.get('enable_summarization') }}>
                 <label for="enable_summarization" class="ml-2 block text-gray-900">Enable Summarization</label>
             </div>
+            <div class="form-group flex items-center">
+                <input type="checkbox" name="background" id="background" class="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300 rounded">
+                <label for="background" class="ml-2 block text-gray-900">Run in background (you can leave and come back)</label>
+            </div>
             <button type="submit" class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Research</button>
         </form>
 
+        {% if task_id and background %}
+        <div class="result-card">
+            <h2 class="text-2xl font-bold text-gray-800">Task Started</h2>
+            <p class="mt-4 text-gray-700">Your research task has been started in the background.</p>
+            <p class="mt-2 text-gray-700"><strong>Task ID:</strong> <code class="bg-gray-100 px-2 py-1 rounded">{{ task_id }}</code></p>
+            <p class="mt-4 text-gray-700">You can check the status at:</p>
+            <p class="mt-2"><a href="/status/{{ task_id }}" class="text-blue-600 hover:underline">/status/{{ task_id }}</a></p>
+            <p class="mt-2 text-gray-700">View results when ready at:</p>
+            <p class="mt-2"><a href="/result/{{ task_id }}" class="text-blue-600 hover:underline">/result/{{ task_id }}</a></p>
+            <div class="mt-6">
+                <button onclick="checkStatus('{{ task_id }}')" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
+                    Check Status Now
+                </button>
+            </div>
+            <div id="status-display" class="mt-4 p-4 bg-gray-100 rounded hidden">
+                <h3 class="font-semibold">Status:</h3>
+                <pre id="status-content" class="mt-2 text-sm"></pre>
+            </div>
+        </div>
+        {% endif %}
+
         {% if result %}
         <div class="result-card">
-            <h2 class="text-2xl font-bold text-gray-800">Answer</h2>
-            <p class="mt-2 text-gray-700">{{ result.answer }}</p>
-            <p class="mt-4 text-gray-600"><strong>Confidence:</strong> {{ result.confidence }}/10 ({{ result.certainty_level }})</p>
-            <h3 class="text-xl font-semibold text-gray-800">Reasoning</h3>
-            <p class="mt-2 text-gray-700">{{ result.reasoning }}</p>
-            {% if result.evidence %}
-            <div class="evidence mt-6">
-                <h3 class="text-xl font-semibold text-gray-800">Evidence ({{ result.evidence | length }} sources)</h3>
-                <div class="space-y-4 mt-4">
-                    {% for source in result.evidence %}
-                    <div class="source">
-                        <p class="text-lg font-medium">{{ source.title }}</p>
-                        <p class="text-sm text-gray-600">Confidence: {{ source.confidence }}/10</p>
-                        <p class="mt-2 text-gray-700">{{ source.content }}</p>
-                        {% if source.url %}
-                        <a href="{{ source.url }}" target="_blank" class="text-blue-600 hover:underline">Read more</a>
-                        {% endif %}
-                    </div>
-                    {% endfor %}
+            <h2 class="text-2xl font-bold text-gray-800">Research Results</h2>
+
+            {% if result.research_plan %}
+            <h3 class="text-lg font-semibold text-gray-800 mt-4">Plan</h3>
+            <pre class="mt-2 text-gray-700" style="white-space:pre-wrap;">{{ result.research_plan }}</pre>
+            {% endif %}
+
+            {% if result.questions %}
+            <h3 class="text-lg font-semibold text-gray-800 mt-4">Questions</h3>
+            <ul class="mt-2 list-disc list-inside text-gray-700">
+                {% for q in result.questions %}
+                <li>{{ q }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+
+            {% if result.report %}
+            <h3 class="text-lg font-semibold text-gray-800 mt-4">Report</h3>
+            <pre class="mt-2 text-gray-700" style="white-space:pre-wrap;">{{ result.report }}</pre>
+            {% endif %}
+
+            {% if result.feedback %}
+            <h3 class="text-lg font-semibold text-gray-800 mt-4">Feedback</h3>
+            <pre class="mt-2 text-gray-700" style="white-space:pre-wrap;">{{ result.feedback }}</pre>
+            {% endif %}
+
+            {% if result.articles and result.articles | length > 0 %}
+            <h3 class="text-lg font-semibold text-gray-800 mt-4">Articles ({{ result.articles | length }})</h3>
+            <div class="mt-2 space-y-4">
+                {% for a in result.articles %}
+                <div class="source">
+                    <p class="text-lg font-medium">{{ a.title or a.get('title') or 'Untitled' }}</p>
+                    <p class="text-sm text-gray-600">Source: {{ a.get('source') or a.get('url') or 'unknown' }}</p>
+                    <p class="mt-2 text-gray-700">{{ a.get('summary') or a.get('text') or a.get('snippet') }}</p>
+                    {% if a.get('url') %}
+                    <a href="{{ a.get('url') }}" target="_blank" class="text-blue-600 hover:underline">Read more</a>
+                    {% endif %}
                 </div>
+                {% endfor %}
             </div>
+            {% endif %}
+
+            {# Backwards-compatible fields (if present) #}
+            {% if result.answer %}
+            <h3 class="text-lg font-semibold text-gray-800 mt-4">Answer</h3>
+            <p class="mt-2 text-gray-700">{{ result.answer }}</p>
             {% endif %}
         </div>
         {% endif %}
@@ -228,9 +278,12 @@
                 localStorage.setItem('enable_summarization', this.checked);
             });
 
-            // Show loading overlay on form submission
+            // Show loading overlay on form submission (only if not background mode)
             researchForm.addEventListener('submit', function() {
-                loadingOverlay.style.display = 'flex';
+                const backgroundCheckbox = document.getElementById('background');
+                if (!backgroundCheckbox.checked) {
+                    loadingOverlay.style.display = 'flex';
+                }
             });
 
             // Hide loading overlay when the page finishes loading (after form submission)
@@ -238,6 +291,35 @@
                 loadingOverlay.style.display = 'none';
             });
         });
+
+        function checkStatus(taskId) {
+            fetch(`/status/${taskId}`)
+                .then(response => response.json())
+                .then(data => {
+                    const statusDisplay = document.getElementById('status-display');
+                    const statusContent = document.getElementById('status-content');
+                    statusDisplay.classList.remove('hidden');
+                    statusContent.textContent = JSON.stringify(data, null, 2);
+                    
+                    if (data.status === 'completed') {
+                        statusContent.textContent += '\n\nTask completed! Redirecting to results...';
+                        setTimeout(() => {
+                            window.location.href = '/result/' + taskId;
+                        }, 2000);
+                    } else if (data.status === 'failed') {
+                        statusContent.textContent += '\n\nTask failed: ' + data.error;
+                    } else {
+                        statusContent.textContent += '\n\nTask is still running... Checking again in 5 seconds.';
+                        setTimeout(() => checkStatus(taskId), 5000);
+                    }
+                })
+                .catch(error => {
+                    const statusDisplay = document.getElementById('status-display');
+                    const statusContent = document.getElementById('status-content');
+                    statusDisplay.classList.remove('hidden');
+                    statusContent.textContent = 'Error checking status: ' + error.message;
+                });
+        }
     </script>
 </body>
 </html>

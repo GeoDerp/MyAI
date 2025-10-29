@@ -112,6 +112,10 @@ def summarize_document(doi: str, condensation_config: Dict[str, Any], max_tokens
     fingerprint = make_fingerprint(doi, json.dumps(condensation_config, sort_keys=True), str(max_tokens))
     existing = cache_get(fingerprint)
     if existing:
+        # Older cache entries may not include the fingerprint key. Ensure the
+        # returned shape always contains the fingerprint for caller convenience.
+        if isinstance(existing, dict) and "fingerprint" not in existing:
+            existing["fingerprint"] = fingerprint
         return existing
 
     # Placeholder condensation: in real pipeline we'd chunk, embed, and summarize.
@@ -124,8 +128,10 @@ def summarize_document(doi: str, condensation_config: Dict[str, Any], max_tokens
             "max_tokens": max_tokens,
         }
     }
-    cache_set(fingerprint, out)
+    # Ensure the fingerprint is part of the object saved to cache so subsequent
+    # reads return the same shape (tests expect a 'fingerprint' key).
     out["fingerprint"] = fingerprint
+    cache_set(fingerprint, out)
     return out
 
 
