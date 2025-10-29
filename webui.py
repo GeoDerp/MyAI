@@ -149,7 +149,13 @@ def index():
                 thread.start()
                 
                 logger.info(f"webui: started background task {task_id}")
-                return render_template('index.html', result=None, request=request, task_id=task_id, background=True)
+                logger.debug(f"webui: rendering template with task_id={task_id}, background={background}")
+                # Return template with task_id and background flag for status display
+                return render_template('index.html', 
+                                      result=None, 
+                                      request=request, 
+                                      task_id=task_id, 
+                                      background=background)
 
             # Run synchronously (original behavior)
             logger.info("webui: calling test_research_endpoint with base_url=%s", base_url)
