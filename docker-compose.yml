@@ -8,6 +8,12 @@ services:
     environment:
       - PORT=8081
       - HOST=0.0.0.0
+      # LLM Timeout Configuration (for slow local models)
+      - LLM_TIMEOUT=120
+      - LLM_BASE_TIMEOUT=90
+      - LLM_MAX_TIMEOUT=300
+      - LLM_MIN_TIMEOUT=30
+      - LLM_RETRIES=2
       # Optional: set MYAI_DEBUG_FILE to enable file-backed debug logging inside the container
       # - MYAI_DEBUG_FILE=/var/log/myai_debug.log
     ports:

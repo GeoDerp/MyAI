@@ -38,8 +38,9 @@ PY
     ;;
   webui)
     echo "Starting web UI (Gunicorn + Flask)..."
-    # Run Flask app under Gunicorn with a small number of workers suitable for lightweight containers
-    exec gunicorn --bind ${HOST}:${PORT} --workers 2 --threads 4 --log-level info --access-logfile - "webui:app"
+    # Run Flask app under Gunicorn with a single worker to avoid in-memory task storage issues
+    # NOTE: For production with multiple workers, implement Redis-backed task storage
+    exec gunicorn --bind ${HOST}:${PORT} --workers 1 --threads 4 --timeout 600 --log-level info --access-logfile - "webui:app"
     ;;
   *)
     echo "Unknown mode: $MODE" >&2

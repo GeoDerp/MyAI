@@ -109,7 +109,7 @@ def arxiv_search_tool(query: str, max_results: int = 5) -> List[dict]:
         max_results: The maximum number of results to return.
 
     Returns:
-        A list of papers, where each paper is a dictionary.
+        A list of papers, where each paper is a dictionary with proper url/source fields.
     """
     search = arxiv.Search(
         query=query,
@@ -124,8 +124,11 @@ def arxiv_search_tool(query: str, max_results: int = 5) -> List[dict]:
                 "title": result.title,
                 "authors": [author.name for author in result.authors],
                 "summary": result.summary,
+                "text": result.summary,  # Add 'text' field for consistency
                 "published": result.published.isoformat(),
                 "pdf_url": result.pdf_url,
+                "url": result.entry_id,  # Add 'url' field pointing to arxiv entry
+                "source": "arxiv.org",   # Add 'source' field
                 "entry_id": result.entry_id,
             }
         )

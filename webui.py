@@ -1,5 +1,5 @@
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 from myai.api import test_research_endpoint
 import asyncio
 import os
@@ -7,6 +7,7 @@ import logging
 import threading
 import uuid
 import time
+import json
 from datetime import datetime
 
 logger = logging.getLogger("myai.webui")
@@ -23,6 +24,44 @@ app = Flask(__name__)
 tasks = {}
 tasks_lock = threading.Lock()
 
+# Progress tracking for real-time updates
+# Structure: {task_id: [{"step": "plan", "status": "running", "timestamp": "...", "message": "..."}]}
+progress_store = {}
+progress_lock = threading.Lock()
+
+
+def update_progress(task_id, step, status, message="", metadata=None):
+    """
+    Update progress for a task. Called from research workflow.
+    
+    Args:
+        task_id: Unique task identifier
+        step: Current step (plan, gather, synthesize, reflect)
+        status: Status (starting, running, completed, failed)
+        message: Human-readable progress message
+        metadata: Optional dict with additional info (e.g., chunk number, article count)
+    """
+    with progress_lock:
+        if task_id not in progress_store:
+            progress_store[task_id] = []
+        
+        progress_entry = {
+            "step": step,
+            "status": status,
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": message,
+        }
+        if metadata:
+            progress_entry["metadata"] = metadata
+        
+        progress_store[task_id].append(progress_entry)
+        
+        # Keep only last 100 entries to prevent memory bloat
+        if len(progress_store[task_id]) > 100:
+            progress_store[task_id] = progress_store[task_id][-100:]
+    
+    logger.debug(f"Progress update for {task_id}: {step} - {status} - {message}")
+
 
 def run_research_task(task_id, question, base_url, max_iterations, min_confidence, enable_summarization):
     """Run research in background thread and update task status"""
@@ -31,8 +70,19 @@ def run_research_task(task_id, question, base_url, max_iterations, min_confidenc
             tasks[task_id]['status'] = 'running'
             tasks[task_id]['started_at'] = datetime.utcnow().isoformat()
         
+        # Initialize progress tracking
+        update_progress(task_id, "init", "starting", "Starting research task...")
+        
         logger.info(f"webui: starting background task {task_id} for question: {question}")
-        result = asyncio.run(test_research_endpoint(question, base_url=base_url))
+        
+        # Pass progress callback to research endpoint
+        result = asyncio.run(test_research_endpoint(
+            question, 
+            base_url=base_url,
+            progress_callback=lambda step, status, msg, meta=None: update_progress(task_id, step, status, msg, meta)
+        ))
+        
+        update_progress(task_id, "complete", "completed", "Research completed successfully!")
         
         with tasks_lock:
             tasks[task_id]['status'] = 'completed'
@@ -84,10 +134,89 @@ def run_research_task(task_id, question, base_url, max_iterations, min_confidenc
             
     except Exception as e:
         logger.exception(f'webui: task {task_id} failed')
+        update_progress(task_id, "error", "failed", f"Task failed: {str(e)}")
         with tasks_lock:
             tasks[task_id]['status'] = 'failed'
             tasks[task_id]['error'] = str(e)
             tasks[task_id]['completed_at'] = datetime.utcnow().isoformat()
+
+
+@app.route('/progress/<task_id>')
+def progress_stream(task_id):
+    """
+    SSE endpoint for streaming real-time progress updates.
+    
+    Usage from client:
+        const eventSource = new EventSource(`/progress/${taskId}`);
+        eventSource.onmessage = (event) => {
+            const progress = JSON.parse(event.data);
+            console.log(progress);
+        };
+    """
+    def generate():
+        last_index = 0
+        max_wait = 300  # 5 minutes timeout
+        start_time = time.time()
+        
+        # Wait up to 5 seconds for task to be registered
+        task_found = False
+        for _ in range(10):
+            with tasks_lock:
+                if task_id in tasks:
+                    task_found = True
+                    break
+            time.sleep(0.5)
+        
+        if not task_found:
+            with tasks_lock:
+                if task_id not in tasks:
+                    yield f"data: {json.dumps({'error': 'Task not found'})}\n\n"
+                    return
+        
+        # Send initial connection message
+        yield f"data: {json.dumps({'step': 'connection', 'status': 'connected', 'timestamp': datetime.utcnow().isoformat(), 'message': 'Connected to progress stream'})}\n\n"
+        
+        while True:
+            # Check if we've exceeded max wait time
+            if time.time() - start_time > max_wait:
+                yield f"data: {json.dumps({'error': 'Progress stream timeout'})}\n\n"
+                break
+            
+            # Get new progress entries
+            with progress_lock:
+                if task_id in progress_store:
+                    entries = progress_store[task_id][last_index:]
+                    if entries:
+                        for entry in entries:
+                            yield f"data: {json.dumps(entry)}\n\n"
+                        last_index += len(entries)
+            
+            # Check if task is complete
+            with tasks_lock:
+                task = tasks.get(task_id)
+                if task and task['status'] in ('completed', 'failed'):
+                    # Send final status and close stream
+                    final_msg = {
+                        "step": "final",
+                        "status": task['status'],
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "message": "Task completed" if task['status'] == 'completed' else f"Task failed: {task.get('error', 'Unknown error')}"
+                    }
+                    yield f"data: {json.dumps(final_msg)}\n\n"
+                    break
+            
+            # Wait before checking again
+            time.sleep(1)
+    
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive'
+        }
+    )
 
 
 @app.route('/', methods=['GET', 'POST'])

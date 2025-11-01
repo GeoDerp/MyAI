@@ -164,9 +164,23 @@ user network and point the agent at the RamaLama container by name.
 # Create a user network (one-time)
 podman network create myai-net
 
-# Start RamaLama on that network (host container will be reachable as 'ramalama')
-ramalama serve --network=myai-net --port 8080 --name research-agent granite4:small-h
-#some usefull arguments --ngl 0 --image quay.io/ramalama/intel-gpu:latest 
+# Start RamaLama with automatic GPU detection and optimization
+# The script probes AMD/ROCm, NVIDIA/CUDA, Intel iGPU, Apple Silicon, or CPU-only hosts and
+# automatically selects the matching RamaLama runtime. It calculates available VRAM and
+# falls back to CPU mode when dedicated memory is below 4GB while still leveraging large
+# system RAM for inference. Layer offloading is tuned based on VRAM capacity:
+# - < 512MB (integrated): CPU-only mode (--ngl 0)
+# - 4-8GB: Minimal GPU offload (5-15 layers)
+# - 8-16GB: Balanced GPU/CPU (15-35 layers)
+# - 16GB+: Full GPU offload (35-41 layers)
+bash scripts/start_ramalama_dynamic.sh granite4:small-h 8080 research-agent myai-net
+
+# Or manually specify GPU layers if you know your hardware:
+# Full GPU (requires 20GB+ VRAM):
+# ramalama serve --network=myai-net --port 8080 --name research-agent granite4:small-h -d
+
+# CPU-only (integrated GPUs or < 4GB VRAM):
+# ramalama serve --network=myai-net --port 8080 --name research-agent --ngl 0 granite4:small-h -d 
 
 # Optional: run Redis on the same network (recommended for production caching)
 podman run -d --name myai-redis --network=myai-net \
@@ -288,6 +302,48 @@ curl "http://127.0.0.1:8081/status/abc-123-def"
 
 # Get results when complete
 curl "http://127.0.0.1:8081/result/abc-123-def"
+```
+
+### Production Deployment Considerations
+
+**Important**: The web UI currently uses **in-memory task storage** and runs with a single Gunicorn worker to ensure task state consistency. This means:
+
+- ✅ **Task persistence works correctly** across requests
+- ⚠️ **Tasks are lost on container restart** 
+- ⚠️ **Not suitable for high-concurrency loads** (single worker limitation)
+
+**For production environments with high traffic**, consider:
+1. **Implement Redis-backed task storage** to persist tasks across restarts and enable multi-worker deployment
+2. **Use a proper task queue** like Celery or RQ for distributed task processing
+3. **Scale horizontally** with multiple instances once shared state is implemented
+
+**Timeout Considerations:**
+- CPU-only LLM inference can take 5-10 minutes per request
+- The Gunicorn timeout is set to 600 seconds (10 minutes)
+- For very long research tasks, use background mode
+- Monitor logs for `get_completion failed after 3 attempts` errors which indicate LLM timeouts
+
+### Running with Docker Compose
+
+The repository includes a `docker-compose.yml` for production deployment:
+
+```bash
+# Build and start all services
+podman-compose up -d
+
+# Or with docker-compose
+docker-compose up -d
+```
+
+This starts:
+- **webui**: Research agent web interface (port 8081)
+- **myai-redis**: Redis for caching (port 6379, internal only)
+- *Optional*: **ramalama**: Local LLM server (configure as needed)
+
+Check health status:
+```bash
+curl http://localhost:8081/healthz
+curl http://localhost:8081/readyz
 ```
 
 Notes about running with a local RamaLama server

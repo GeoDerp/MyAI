@@ -90,7 +90,7 @@ class LLMManager:
     def get_completion(self, messages: list[Dict[str, str]], **kwargs: Any) -> Optional[Dict[str, Any]]:
         """Get completion with automatic retry logic."""
         retries = int(os.environ.get('LLM_RETRIES', '2'))
-        timeout = int(os.environ.get('LLM_TIMEOUT', '30'))
+        timeout = int(os.environ.get('LLM_TIMEOUT', '120'))  # Increased default from 30 to 120
         
         return self._get_completion_with_retries(
             messages=messages,

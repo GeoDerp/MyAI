@@ -10,6 +10,7 @@ import json
 
 from myai.llm_manager import LLMManager
 from myai.tools import exa_search_tool, arxiv_search_tool, llama_parse_tool
+from myai.adaptive_llm import AdaptiveLLMHandler
 
 # --- Agent State ---
 
@@ -36,10 +37,51 @@ class StormAgent:
         self.tools = tools
         self.exa_api_key = os.environ.get("EXA_API_KEY")
         self.llama_cloud_api_key = os.environ.get("LLAMA_CLOUD_API_KEY")
+        
+        # Auto-reduce max_iterations for CPU-only mode to prevent excessive runtime
+        cpu_only = self._detect_cpu_only_mode()
+        if cpu_only and max_iterations > 2:
+            print(f"[StormAgent] CPU-only mode detected. Reducing max_iterations from {max_iterations} to 2 to limit runtime.")
+            max_iterations = 2
+        
         self.max_iterations = max_iterations
         # internal counter to avoid infinite loops in LangGraph
         self._iteration = 0
+        
+        # Progress callback for real-time updates
+        self.progress_callback = None
+        
+        # Initialize adaptive LLM handler for slow models
+        self.adaptive_handler = AdaptiveLLMHandler(
+            llm_manager=llm_manager,
+            base_timeout=int(os.environ.get("LLM_BASE_TIMEOUT", "90")),
+            max_timeout=int(os.environ.get("LLM_MAX_TIMEOUT", "300")),
+            min_timeout=int(os.environ.get("LLM_MIN_TIMEOUT", "30"))
+        )
+        
         self.graph = self._build_graph()
+    
+    def _report_progress(self, step, status, message, metadata=None):
+        """Helper to report progress if callback is set"""
+        if self.progress_callback:
+            try:
+                self.progress_callback(step, status, message, metadata)
+            except Exception as e:
+                print(f"[StormAgent] Progress callback error: {e}")
+    
+    def _detect_cpu_only_mode(self) -> bool:
+        """
+        Detect if running in CPU-only mode based on environment variables.
+        Returns True if CPU-only, False otherwise.
+        """
+        if os.environ.get("CPU_ONLY_MODE", "").lower() in ("1", "true", "yes"):
+            return True
+        if os.environ.get("GPU_LAYERS", "") == "0":
+            return True
+        vram_mb = os.environ.get("GPU_VRAM_MB", "")
+        if vram_mb and vram_mb.isdigit() and int(vram_mb) < 1024:
+            return True
+        return False
 
     def _build_graph(self) -> StateGraph:
         """
@@ -69,8 +111,11 @@ class StormAgent:
     def _plan_step(self, state: ResearchState) -> ResearchState:
         """
         Generates a research plan and a list of questions to investigate.
+        Uses adaptive timeout for slow models.
         """
         print("--- Plan Step ---")
+        self._report_progress("plan", "starting", "Generating research plan...")
+        
         messages = [
             {"role": "user", "content": f"Generate a concise research plan and a list of specific questions for the topic: {state.topic}. Your response MUST be a valid JSON object with two keys: \"plan\" (string, a brief overview of the research approach) and \"questions\" (list of strings, specific questions to investigate). Example: {{ \"plan\": \"Overview of AI impact\", \"questions\": [\"What is AI?\", \"How does AI affect research?\"] }}"}
         ]
@@ -78,7 +123,7 @@ class StormAgent:
         try:
             availability = getattr(self.llm_manager, "available", None)
             base = getattr(self.llm_manager, "base_url", None)
-            msg = f"[DEBUG] StormAgent._plan_step: calling llm_manager.get_completion (base_url={base}, available={availability}, messages_len={len(messages)})\n"
+            msg = f"[DEBUG] StormAgent._plan_step: calling adaptive handler (base_url={base}, available={availability}, messages_len={len(messages)})\n"
             print(msg.strip())
             try:
                 with open("/tmp/myai_debug.log", "a") as f:
@@ -86,9 +131,12 @@ class StormAgent:
             except Exception:
                 pass
         except Exception:
-            print("[DEBUG] StormAgent._plan_step: calling llm_manager.get_completion (unable to read llm_manager state)")
+            print("[DEBUG] StormAgent._plan_step: calling adaptive handler")
 
-        response = self.llm_manager.get_completion(messages)
+        self._report_progress("plan", "running", "Waiting for LLM response...")
+        
+        # Use adaptive handler with shorter timeout for plan generation
+        response = self.adaptive_handler.get_completion_adaptive(messages, fallback_on_timeout=True)
         try:
             # Use LLMManager helper to extract assistant text in a normalized form.
             result_content = self.llm_manager.extract_assistant_text(response)
@@ -105,6 +153,8 @@ class StormAgent:
             if not isinstance(result_content, str):
                 raise ValueError("No string assistant content available")
 
+            self._report_progress("plan", "running", "Parsing plan response...")
+            
             # Pre-process the assistant text to remove common wrappers such as
             # Markdown code fences (```json ... ```), triple backticks, or
             # surrounding explanation text that causes json.loads to fail.
@@ -136,6 +186,11 @@ class StormAgent:
 
             state.research_plan = plan_data.get("plan")
             state.questions = plan_data.get("questions", [])
+            
+            num_questions = len(state.questions)
+            self._report_progress("plan", "completed", 
+                                f"Plan generated with {num_questions} research questions",
+                                {"num_questions": num_questions})
         except Exception as e:
             print(f"Error parsing plan from LLM: {e}")
             # Try to present a useful normalized dump for debugging
@@ -146,6 +201,10 @@ class StormAgent:
             print(f"Raw LLM response (normalized): {raw_norm}")
             state.research_plan = "Default plan: Gather articles and synthesize a report."
             state.questions = [f"What is {state.topic}?", f"What are the key aspects of {state.topic}?"]
+            
+            self._report_progress("plan", "completed", 
+                                "Using default plan (LLM parse failed)",
+                                {"num_questions": len(state.questions)})
         
         return state
 
@@ -154,14 +213,27 @@ class StormAgent:
         Gathers articles and information based on the research questions.
         """
         print("--- Gather Step ---")
-        for question in state.questions:
+        self._report_progress("gather", "starting", 
+                            f"Searching for articles ({len(state.questions)} questions)...")
+        
+        total_questions = len(state.questions)
+        for idx, question in enumerate(state.questions, 1):
             print(f"Searching for: {question}")
+            self._report_progress("gather", "running", 
+                                f"Question {idx}/{total_questions}: {question[:50]}...",
+                                {"current_question": idx, "total_questions": total_questions})
+            
             # Use Exa and Arxiv tools to search for articles, passing API key to Exa
             exa_results = exa_search_tool.invoke({"query": question, "api_key": os.environ.get("EXA_API_KEY")})
             arxiv_results = arxiv_search_tool.invoke(question)
             
             state.articles.extend(exa_results)
             state.articles.extend(arxiv_results)
+        
+        num_articles = len(state.articles)
+        self._report_progress("gather", "completed", 
+                            f"Gathered {num_articles} articles",
+                            {"num_articles": num_articles})
         
         # Example of using LlamaParse (you would typically have a separate step for this)
         # For demonstration, let's assume we have a PDF file to parse.
@@ -176,16 +248,45 @@ class StormAgent:
     def _synthesize_step(self, state: ResearchState) -> ResearchState:
         """
         Synthesizes the gathered information into a research report.
+        Uses adaptive strategies for slow or limited LLMs.
         """
         print("--- Synthesize Step ---")
-        # Concatenate article texts but guard against extremely long contexts which can break local LLMs
+        self._report_progress("synthesize", "starting", 
+                            f"Synthesizing report from {len(state.articles)} articles...")
+        
+        # Check if we should use chunked processing
+        total_chars = sum(len(article.get("text", "") or article.get("summary", "")) for article in state.articles)
+        use_chunking = total_chars > 15000 or len(state.articles) > 8
+        
+        if use_chunking:
+            print(f"[INFO] Using chunked synthesis for {len(state.articles)} articles ({total_chars} chars)")
+            self._report_progress("synthesize", "running", 
+                                f"Processing {total_chars} chars in chunks...",
+                                {"total_chars": total_chars, "chunked": True})
+            try:
+                state.report = self.adaptive_handler.synthesize_with_chunking(
+                    topic=state.topic,
+                    articles=state.articles,
+                    max_chunk_chars=8000
+                )
+                self._report_progress("synthesize", "completed", 
+                                    "Report synthesis complete")
+                return state
+            except Exception as e:
+                print(f"[WARN] Chunked synthesis failed: {e}, falling back to standard method")
+                self._report_progress("synthesize", "running", 
+                                    "Chunked synthesis failed, using standard method...")
+        
+        # Standard synthesis with adaptive timeout
+        self._report_progress("synthesize", "running", 
+                            "Generating report with standard synthesis...")
+        
         article_texts = "\n\n".join([
             article.get("text", "") or article.get("summary", "") for article in state.articles
         ])
 
-        # Truncate to a reasonable size to avoid context-size errors from the LLM backend.
-        # Adjust max_chars based on your local model's context window. 20000 is a conservative default.
-        max_chars = 20000
+        # Truncate to a reasonable size
+        max_chars = 15000
         truncated = False
         if len(article_texts) > max_chars:
             article_texts = article_texts[:max_chars]
@@ -201,7 +302,7 @@ class StormAgent:
         try:
             availability = getattr(self.llm_manager, "available", None)
             base = getattr(self.llm_manager, "base_url", None)
-            msg = f"[DEBUG] StormAgent._synthesize_step: calling llm_manager.get_completion (base_url={base}, available={availability}, prompt_len={len(prompt)})\n"
+            msg = f"[DEBUG] StormAgent._synthesize_step: calling adaptive handler (base_url={base}, available={availability}, prompt_len={len(prompt)})\n"
             print(msg.strip())
             try:
                 with open("/tmp/myai_debug.log", "a") as f:
@@ -209,14 +310,20 @@ class StormAgent:
             except Exception:
                 pass
         except Exception:
-            print("[DEBUG] StormAgent._synthesize_step: calling llm_manager.get_completion (unable to read llm_manager state)")
+            print("[DEBUG] StormAgent._synthesize_step: calling adaptive handler")
 
-        response = self.llm_manager.get_completion(messages)
+        # Use adaptive handler instead of direct LLM call
+        response = self.adaptive_handler.get_completion_adaptive(
+            messages, 
+            fallback_on_timeout=True,
+            enable_chunking=use_chunking
+        )
 
         # Handle cases where the LLM call failed or returned None
         if not response:
-            print("[WARN _synthesize_step] LLM returned no response; setting fallback report.")
-            state.report = "[Report generation failed: LLM did not return a response. Please try again with a smaller corpus or configure a larger context window.]"
+            print("[WARN _synthesize_step] Adaptive handler returned no response; setting fallback report.")
+            state.report = "[Report generation failed: LLM did not return a response after adaptive retries. Please try again with fewer articles or configure a faster model.]"
+            self._report_progress("synthesize", "failed", "Report generation failed")
             return state
 
         # Safely extract the assistant message content
@@ -233,10 +340,14 @@ class StormAgent:
                     state.report = choices[0]["message"]["content"]
                 else:
                     raise ValueError("Malformed LLM response: missing content")
+            
+            self._report_progress("synthesize", "completed", 
+                                f"Report generated ({len(state.report)} chars)")
         except Exception as e:
             print(f"[ERROR _synthesize_step] Failed to extract report from LLM response: {e}")
             print(f"Raw LLM response: {response}")
             state.report = "[Report generation failed: unable to parse LLM response. See logs for raw output.]"
+            self._report_progress("synthesize", "failed", f"Parse error: {str(e)}")
 
         return state
 
@@ -245,6 +356,9 @@ class StormAgent:
         Reflects on the generated report and decides whether to continue.
         """
         print("--- Reflect Step ---")
+        self._report_progress("reflect", "starting", 
+                            f"Reviewing report (iteration {self._iteration + 1}/{self.max_iterations})...")
+        
         messages = [
             {"role": "user", "content": f"Review the following report on {state.topic} and provide feedback. Should the research continue? Report:\n{state.report}"}
         ]
@@ -266,6 +380,7 @@ class StormAgent:
         if not response:
             print("[WARN _reflect_step] LLM returned no response; ending research loop.")
             state.feedback = "No feedback (LLM unavailable)."
+            self._report_progress("reflect", "completed", "No feedback (LLM unavailable)")
             return state
 
         try:
@@ -280,6 +395,7 @@ class StormAgent:
         except Exception:
             print(f"[WARN _reflect_step] Malformed LLM response: {response}")
             state.feedback = "No feedback (malformed LLM response)."
+            self._report_progress("reflect", "completed", "Malformed LLM response")
             return state
 
         state.feedback = feedback
@@ -288,6 +404,9 @@ class StormAgent:
         if "continue" in feedback.lower():
             # In a real implementation, you would update the questions and plan based on the feedback.
             state.questions = [f"What are the missing aspects in the report on {state.topic}?"]
+            self._report_progress("reflect", "completed", "Continuing research (iteration complete)")
+        else:
+            self._report_progress("reflect", "completed", "Research complete (satisfied)")
 
         # increment iteration counter and enforce max iterations
         self._iteration += 1
@@ -295,6 +414,7 @@ class StormAgent:
             print(f"[INFO] Reached max_iterations ({self.max_iterations}); ending research loop.")
             # Clear feedback so _decide_next_step will return 'end'
             state.feedback = (state.feedback or "") + " (max iterations reached)"
+            self._report_progress("reflect", "completed", f"Max iterations ({self.max_iterations}) reached")
 
         return state
 
@@ -310,10 +430,17 @@ class StormAgent:
             return "continue"
         return "end"
 
-    def run(self, topic: str) -> Dict[str, Any]:
+    def run(self, topic: str, progress_callback=None) -> Dict[str, Any]:
         """
         Runs the research agent on a given topic.
+        
+        Args:
+            topic: Research topic/question
+            progress_callback: Optional callback for progress updates
+                             Signature: callback(step, status, message, metadata=None)
         """
+        # Set progress callback for this run
+        self.progress_callback = progress_callback
         # reset iteration counter each run
         self._iteration = 0
         initial_state = ResearchState(topic=topic)

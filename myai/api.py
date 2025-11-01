@@ -79,11 +79,17 @@ async def research(request: ResearchRequest):
     )
 
 
-async def test_research_endpoint(topic: str, base_url: str | None = None):
+async def test_research_endpoint(topic: str, base_url: str | None = None, progress_callback=None):
     """
     A test function to directly invoke the research endpoint logic.
     Optionally accepts a `base_url` to override the LLM endpoint at runtime
     (useful for the web UI when the user points to a local RamaLama instance).
+    
+    Args:
+        topic: Research topic/question
+        base_url: Optional LLM endpoint URL override
+        progress_callback: Optional callback function for progress updates
+                          Signature: callback(step, status, message, metadata=None)
     """
     debug_file = os.environ.get("MYAI_DEBUG_FILE")
 
@@ -116,7 +122,8 @@ async def test_research_endpoint(topic: str, base_url: str | None = None):
             logger.debug("Unable to write invocation to debug file %s", debug_file)
 
     # Directly run the agent to obtain the final state (a dict-like object)
-    final_state = agent.run(topic)
+    # Pass progress callback if provided
+    final_state = agent.run(topic, progress_callback=progress_callback)
 
     # Normalize the returned final_state into a plain dict with expected fields
     return {
