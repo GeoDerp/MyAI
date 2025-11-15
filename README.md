@@ -7,8 +7,10 @@ A production-ready, academically rigorous Deep Research Agent built with a Hybri
 - **🧠 Hybrid Agent Architecture**: Combines the strengths of LangGraph, the STORM research framework, and specialized tools.
 - **🔄 Deterministic & State-Managed Execution**: LangGraph ensures reliable, iterative research tasks.
 - **📚 Rigorous Research Methodology**: Implements the STORM framework for comprehensive, multi-perspective question asking.
+- **⏱️ Enforced Runtime SLA**: Every research run honors a 30-minute wall-clock budget (configurable via `MYAI_MAX_RUNTIME_SECONDS`) even on CPU-only deployments.
 - **� LLM Sovereignty**: Supports self-hosted models via Ollama and `litellm` for maximum model choice and cost control.
 - **🛠️ Specialized Tooling**: Integrates LlamaParse for PDF ingestion, Exa API for semantic search, and the Arxiv API for academic research.
+- **✅ Ethical Resource Validation**: Startup checks verify that all external APIs are on the approved open-data allowlist (DuckDuckGo, arXiv, Crossref, Exa, RamaLama/local hosts).
 - **� Production-Ready**: Served via a FastAPI application and containerized with Docker.
 
 ## Architecture
@@ -135,6 +137,26 @@ uv run python research_agent_example.py --mode all
 ```
 
 ### Using RamaLama (local, no API key needed)
+
+## Operational Safeguards
+
+### Runtime budget (≤30 minutes per question)
+
+- Both the FastAPI STORM agent and the legacy `research_agent` enforce a 30-minute wall-clock SLA per research question via a shared runtime guard.
+- The limit covers CPU-only deployments—slow local LLMs automatically reduce iterations and will be interrupted once the budget is exhausted.
+- Configure the budget with `MYAI_MAX_RUNTIME_SECONDS` (default `1800`). A graceful partial report is returned alongside `runtime_limited` metadata when the limit is reached.
+
+### Ethical resource validation
+
+- On startup, the API/web UI runs `myai.ethics.assert_resource_policy_or_raise()` which ensures every configured endpoint belongs to the approved open-data allowlist (DuckDuckGo, arXiv, Crossref, Exa, RamaLama/local hosts).
+- Extend the allowlist via `MYAI_ALLOWED_RESOURCE_HOSTS="host1,host2"` when integrating additional vetted services.
+- You can audit the current configuration locally:
+
+```bash
+python -m myai.ethics
+```
+
+The command prints the mapped hosts and exits non-zero if a host violates the policy.
 
 
 #### running with RamaLama hosted on the host (recommended for containers)

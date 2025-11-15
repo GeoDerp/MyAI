@@ -11,6 +11,7 @@ import json
 from myai.llm_manager import LLMManager
 from myai.tools import exa_search_tool, arxiv_search_tool, llama_parse_tool
 from myai.adaptive_llm import AdaptiveLLMHandler
+from myai.runtime_limits import RuntimeGuard, RuntimeLimitExceeded, resolve_runtime_limit_seconds
 
 # --- Agent State ---
 
@@ -32,7 +33,7 @@ class StormAgent:
     An agent that implements the STORM research methodology using LangGraph.
     """
 
-    def __init__(self, llm_manager: LLMManager, tools: List[Any], max_iterations: int = 5):
+    def __init__(self, llm_manager: LLMManager, tools: List[Any], max_iterations: int = 5, max_runtime_seconds: int | None = None):
         self.llm_manager = llm_manager
         self.tools = tools
         self.exa_api_key = os.environ.get("EXA_API_KEY")
@@ -50,6 +51,10 @@ class StormAgent:
         
         # Progress callback for real-time updates
         self.progress_callback = None
+
+        # Runtime guard configuration (default 30 minutes)
+        self.max_runtime_seconds = resolve_runtime_limit_seconds(max_runtime_seconds)
+        self._runtime_guard: RuntimeGuard | None = None
         
         # Initialize adaptive LLM handler for slow models
         self.adaptive_handler = AdaptiveLLMHandler(
@@ -61,6 +66,19 @@ class StormAgent:
         
         self.graph = self._build_graph()
     
+    def _ensure_runtime_budget(self, state: ResearchState | None, step: str) -> None:
+        if not self._runtime_guard:
+            return
+        try:
+            self._runtime_guard.ensure_within_budget(step)
+        except RuntimeLimitExceeded as exc:
+            if state is not None:
+                try:
+                    exc.state_snapshot = state.model_copy(deep=True)
+                except Exception:
+                    exc.state_snapshot = state
+            raise
+
     def _report_progress(self, step, status, message, metadata=None):
         """Helper to report progress if callback is set"""
         if self.progress_callback:
@@ -113,6 +131,7 @@ class StormAgent:
         Generates a research plan and a list of questions to investigate.
         Uses adaptive timeout for slow models.
         """
+        self._ensure_runtime_budget(state, "plan")
         print("--- Plan Step ---")
         self._report_progress("plan", "starting", "Generating research plan...")
         
@@ -212,12 +231,14 @@ class StormAgent:
         """
         Gathers articles and information based on the research questions.
         """
+        self._ensure_runtime_budget(state, "gather")
         print("--- Gather Step ---")
         self._report_progress("gather", "starting", 
                             f"Searching for articles ({len(state.questions)} questions)...")
         
         total_questions = len(state.questions)
         for idx, question in enumerate(state.questions, 1):
+            self._ensure_runtime_budget(state, f"gather-q{idx}")
             print(f"Searching for: {question}")
             self._report_progress("gather", "running", 
                                 f"Question {idx}/{total_questions}: {question[:50]}...",
@@ -250,6 +271,7 @@ class StormAgent:
         Synthesizes the gathered information into a research report.
         Uses adaptive strategies for slow or limited LLMs.
         """
+        self._ensure_runtime_budget(state, "synthesize")
         print("--- Synthesize Step ---")
         self._report_progress("synthesize", "starting", 
                             f"Synthesizing report from {len(state.articles)} articles...")
@@ -355,6 +377,7 @@ class StormAgent:
         """
         Reflects on the generated report and decides whether to continue.
         """
+        self._ensure_runtime_budget(state, "reflect")
         print("--- Reflect Step ---")
         self._report_progress("reflect", "starting", 
                             f"Reviewing report (iteration {self._iteration + 1}/{self.max_iterations})...")
@@ -444,8 +467,39 @@ class StormAgent:
         # reset iteration counter each run
         self._iteration = 0
         initial_state = ResearchState(topic=topic)
-        final_state = self.graph.invoke(initial_state)
-        return final_state
+        self._runtime_guard = RuntimeGuard(self.max_runtime_seconds)
+        try:
+            final_state = self.graph.invoke(initial_state)
+            return final_state
+        except RuntimeLimitExceeded as exc:
+            self._report_progress(
+                "runtime",
+                "failed",
+                str(exc),
+                {
+                    "elapsed_seconds": round(exc.elapsed, 2),
+                    "max_seconds": exc.max_seconds,
+                },
+            )
+            snapshot = exc.state_snapshot or initial_state
+            if isinstance(snapshot, ResearchState):
+                payload = snapshot.model_dump()
+            else:
+                payload = dict(snapshot)
+            payload.setdefault("questions", [])
+            payload.setdefault("articles", [])
+            payload["report"] = payload.get("report") or (
+                f"[Aborted: runtime limit {exc.max_seconds}s exceeded after {exc.elapsed:.2f}s]"
+            )
+            payload["feedback"] = (
+                payload.get("feedback")
+                or "Runtime limit exceeded; partial results only."
+            )
+            payload["runtime_limited"] = True
+            payload["runtime_elapsed_seconds"] = round(exc.elapsed, 2)
+            return payload
+        finally:
+            self._runtime_guard = None
 
 # Example usage:
 if __name__ == "__main__":

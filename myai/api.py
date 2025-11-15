@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from myai.storm_agent import StormAgent
 from myai.llm_manager import LLMManager
 from myai.tools import exa_search_tool, arxiv_search_tool, llama_parse_tool
+from myai.ethics import assert_resource_policy_or_raise, describe_resource_hosts
 import os
 import logging
 from fastapi.responses import JSONResponse
@@ -26,6 +27,10 @@ app = FastAPI(
     description="An API for running the STORM research agent.",
     version="0.1.0",
 )
+
+# Validate ethical resource usage on startup
+assert_resource_policy_or_raise()
+logger.info("Resource hosts: %s", describe_resource_hosts())
 
 # --- Initialize Agent ---
 

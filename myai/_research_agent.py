@@ -76,6 +76,7 @@ def _get_duckduckgo_tool():
     return _duckduckgo_tool
 from . import cache as _cache
 from typing import Dict, Any
+from .runtime_limits import RuntimeGuard, RuntimeLimitExceeded
 
 
 def record_source_with_condensation(
@@ -819,6 +820,7 @@ async def research_question(
         max_iterations=max_iterations,
         min_confidence=min_confidence
     )
+    runtime_guard = RuntimeGuard()
     # Determine summarization behavior and threshold appropriate for model
     chosen, reason = should_enable_summarization(model, enable_summarization)
     deps.enable_summarization = chosen
@@ -833,6 +835,16 @@ async def research_question(
     
     # Create agent for requested model (OpenAI by default or a ramalama URL)
     agent = create_agent(model)
+
+    async def _run_with_runtime_guard(prompt_text: str):
+        runtime_guard.ensure_within_budget("before-agent-run")
+        remaining = runtime_guard.remaining()
+        if remaining <= 0:
+            raise RuntimeLimitExceeded(runtime_guard.max_seconds, runtime_guard.elapsed(), step="agent-run")
+        try:
+            return await asyncio.wait_for(agent.run(prompt_text, deps=deps), timeout=remaining)
+        except asyncio.TimeoutError:
+            raise RuntimeLimitExceeded(runtime_guard.max_seconds, runtime_guard.elapsed(), step="agent-run")
 
     # Log the agent's model/provider to make it explicit in runtime logs
     try:
@@ -883,7 +895,10 @@ async def research_question(
 
     # Run the agent - it will loop internally via tools
     try:
-        result = await agent.run(prompt, deps=deps)
+        result = await _run_with_runtime_guard(prompt)
+    except RuntimeLimitExceeded as exc:
+        logger.warning("Runtime limit hit after %.2fs (limit %ss)", exc.elapsed, exc.max_seconds)
+        return _runtime_limited_final(question, deps, exc)
     except Exception as e:
         # If the model rejects the request due to context size, attempt
         # a conservative retry with much more aggressive summarization and
@@ -912,7 +927,7 @@ async def research_question(
                     retry_prompt = f"Research concisely: {very_short_q}. Stop when confidence >= {min_confidence}."
 
                 try:
-                    result = await agent.run(retry_prompt, deps=deps)
+                    result = await _run_with_runtime_guard(retry_prompt)
                 except Exception:
                     # If retry fails, re-raise the original exception for visibility
                     print('[ERROR] Retry after context-size failure also failed:')
@@ -1021,6 +1036,32 @@ async def research_question(
     print(f"Certainty level: {final.certainty_level}")
     print("" + "="*80 + "\n")
     
+    return final
+
+
+def _runtime_limited_final(question: str, deps: ResearchDependencies, exc: RuntimeLimitExceeded) -> FinalAnswer:
+    """Construct a FinalAnswer when runtime budget is exceeded."""
+    message = (
+        f"Research aborted after {exc.elapsed:.1f}s to honor the runtime SLA "
+        f"(limit {exc.max_seconds}s)."
+    )
+    reasoning = (
+        "The agent stopped to keep single-question investigations under the 30-minute "
+        "production limit. Consider lowering max_iterations or using a faster model."
+    )
+    final = FinalAnswer(
+        answer=message,
+        confidence=0.0,
+        evidence=deps.sources_collected or [],
+        reasoning=reasoning,
+        certainty_level="low",
+    )
+    final.provenance = {
+        "runtime_limited": True,
+        "question": question,
+        "elapsed_seconds": round(exc.elapsed, 2),
+        "max_seconds": exc.max_seconds,
+    }
     return final
 
 

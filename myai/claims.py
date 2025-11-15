@@ -144,9 +144,24 @@ def merge_claims(claims: List[Claim], min_sources_for_high: int = 2) -> List[Dic
         # Fallback: difflib sequence matcher
         try:
             ratio = _difflib.SequenceMatcher(a=a.lower(), b=b.lower()).ratio()
-            return ratio >= 0.85
+            if ratio >= 0.75:
+                return True
         except Exception:
-            return a.lower() == b.lower()
+            if a.lower() == b.lower():
+                return True
+        # Token-overlap fallback: if two sentences share enough keywords, treat as similar
+        try:
+            tokens_a = {t for t in re.split(r"\W+", a.lower()) if t}
+            tokens_b = {t for t in re.split(r"\W+", b.lower()) if t}
+            if tokens_a and tokens_b:
+                overlap = tokens_a & tokens_b
+                if overlap:
+                    min_len = min(len(tokens_a), len(tokens_b)) or 1
+                    if len(overlap) >= 3 or (len(overlap) / min_len) >= 0.5:
+                        return True
+        except Exception:
+            pass
+        return False
 
     for idx, txt in texts:
         placed = False

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 from myai.storm_agent import StormAgent, ResearchState
 from myai.llm_manager import LLMManager
+from myai.runtime_limits import RuntimeLimitExceeded
 
 class TestStormAgent(unittest.TestCase):
     """
@@ -96,6 +97,21 @@ class TestStormAgent(unittest.TestCase):
 
         state_end = ResearchState(topic="Test", feedback="Looks good.")
         self.assertEqual(self.agent._decide_next_step(state_end), "end")
+
+    def test_runtime_limit_abort(self):
+        """Ensure runtime guard aborts and returns partial payload."""
+        timeout_exc = RuntimeLimitExceeded(max_seconds=1, elapsed=2.0, step="plan")
+        timeout_exc.state_snapshot = ResearchState(topic="Timeout Topic")
+        with unittest.mock.patch("myai.storm_agent.RuntimeGuard") as mock_guard:
+            guard_instance = unittest.mock.MagicMock()
+            guard_instance.ensure_within_budget.side_effect = timeout_exc
+            guard_instance.max_seconds = 1
+            mock_guard.return_value = guard_instance
+
+            result = self.agent.run("Timeout Topic")
+
+        self.assertTrue(result.get("runtime_limited"))
+        self.assertIn("Aborted", result.get("report", ""))
 
 if __name__ == "__main__":
     unittest.main()
