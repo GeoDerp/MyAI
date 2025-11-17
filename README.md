@@ -9,9 +9,10 @@ A production-ready, academically rigorous Deep Research Agent built with a Hybri
 - **📚 Rigorous Research Methodology**: Implements the STORM framework for comprehensive, multi-perspective question asking.
 - **⏱️ Enforced Runtime SLA**: Every research run honors a 30-minute wall-clock budget (configurable via `MYAI_MAX_RUNTIME_SECONDS`) even on CPU-only deployments.
 - **� LLM Sovereignty**: Supports self-hosted models via Ollama and `litellm` for maximum model choice and cost control.
-- **🛠️ Specialized Tooling**: Integrates LlamaParse for PDF ingestion, Exa API for semantic search, and the Arxiv API for academic research.
+- **🛠️ Specialized Tooling**: Integrates LlamaParse for PDF ingestion, Exa API for semantic search, and the Arxiv API for academic research with intelligent rate limit handling.
+- **🔄 Resilient API Integration**: Exponential backoff for ArXiv rate limiting ensures research continues even during peak usage times.
 - **✅ Ethical Resource Validation**: Startup checks verify that all external APIs are on the approved open-data allowlist (DuckDuckGo, arXiv, Crossref, Exa, RamaLama/local hosts).
-- **� Production-Ready**: Served via a FastAPI application and containerized with Docker.
+- **📦 Production-Ready**: Served via a FastAPI application and containerized with Docker.
 
 ## Architecture
 
@@ -350,6 +351,7 @@ A production-ready web UI with **background task support** is available to inter
 - **Task Status API**: Poll task status via `/status/<task_id>` endpoint
 - **Automatic HTML Export**: Results saved to `/tmp/research_report.html` by default
 - **Provenance Tracking**: Automatically writes provenance bundles alongside results
+- **Live Task Dashboard**: The web UI now shows a modern task board with real-time progress, auto-refresh, and persistent task cards even after a browser refresh.
 
 ### Running the Web UI
 
@@ -396,6 +398,13 @@ You'll receive a Task ID and can:
 - Check status at `/status/<task_id>` (returns JSON)
 - View results at `/result/<task_id>` when complete
 - Leave and return anytime - the task continues running
+
+### Monitoring progress without reloading
+
+- Every background submission is added to the dashboard automatically and stored in local storage so in-flight tasks reappear instantly after a refresh.
+- The dashboard streams progress updates over Server-Sent Events (SSE) for running tasks and gracefully falls back to status polling if the SSE channel drops.
+- Each task card surfaces the latest phase (plan, gather, synthesize, reflect), a friendly status pill, and quick actions for copying task IDs, opening `/status/<id>`, or jumping straight to the rendered report once finished.
+- Completed/failed tasks can be cleared with a single click, keeping the workspace focused on what still matters.
 
 **Example workflow:**
 ```bash

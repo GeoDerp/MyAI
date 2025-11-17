@@ -177,6 +177,118 @@
             opacity: 0.7;
             margin-top: 0.25rem;
         }
+        .dashboard-card {
+            background: white;
+            border-radius: 0.75rem;
+            padding: 2rem;
+            box-shadow: 0 15px 35px rgba(15, 23, 42, 0.08);
+            border: 1px solid rgba(148, 163, 184, 0.25);
+        }
+        .task-card {
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            background: linear-gradient(135deg, rgba(248, 250, 252, 0.95), #ffffff);
+            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.05);
+            position: relative;
+            overflow: hidden;
+        }
+        .task-card::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            pointer-events: none;
+            border: 1px solid transparent;
+            background: linear-gradient(120deg, rgba(59,130,246,0.6), rgba(236,72,153,0.5)) border-box;
+            mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+            mask-composite: exclude;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        .task-card:hover::after {
+            opacity: 0.3;
+        }
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 0.2rem 0.75rem;
+            border-radius: 999px;
+        }
+        .status-pill .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            position: relative;
+        }
+        .status-pill .pulse-dot::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            animation: pulse-icon 1.6s infinite;
+            background: currentColor;
+            opacity: 0.35;
+        }
+        .status-pill.running { color: #2563eb; background: rgba(59, 130, 246, 0.15); }
+        .status-pill.pending { color: #7c3aed; background: rgba(124, 58, 237, 0.15); }
+        .status-pill.completed { color: #059669; background: rgba(16, 185, 129, 0.15); }
+        .status-pill.failed { color: #dc2626; background: rgba(248, 113, 113, 0.2); }
+        .btn-ghost {
+            border: 1px solid rgba(59, 130, 246, 0.4);
+            color: #1d4ed8;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+        .btn-ghost:hover {
+            background: rgba(59, 130, 246, 0.08);
+            border-color: rgba(59, 130, 246, 0.7);
+        }
+        .btn-link {
+            font-weight: 500;
+            color: #2563eb;
+            text-decoration: none;
+        }
+        .btn-link:hover {
+            text-decoration: underline;
+        }
+        .empty-state {
+            border: 1px dashed rgba(148, 163, 184, 0.7);
+            border-radius: 0.75rem;
+            padding: 2rem;
+            text-align: center;
+            color: #475569;
+            background: rgba(241, 245, 249, 0.6);
+        }
+        .task-actions button {
+            font-size: 0.85rem;
+            border-radius: 0.5rem;
+            padding: 0.45rem 0.85rem;
+            border: 1px solid rgba(148, 163, 184, 0.7);
+            color: #1f2937;
+            transition: all 0.2s ease;
+            background: white;
+        }
+        .task-actions button:hover {
+            border-color: #2563eb;
+            color: #2563eb;
+        }
+        .badge-soft {
+            background: rgba(248, 250, 252, 0.8);
+            padding: 0.15rem 0.5rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: #475569;
+        }
     </style>
 </head>
 <body class="p-8">
@@ -219,6 +331,34 @@
             </div>
             <button type="submit" class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Research</button>
         </form>
+
+        <section id="task-dashboard" class="mt-12">
+            <div class="dashboard-card">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+                    <div>
+                        <p class="uppercase tracking-wide text-xs text-gray-500 font-semibold">Live monitoring</p>
+                        <h2 class="text-2xl font-bold text-gray-800 mt-1">Background Task Dashboard</h2>
+                        <p class="text-gray-600 mt-2">Every background run appears here automatically. Progress updates stream in real-time &mdash; even after you refresh.</p>
+                    </div>
+                    <div class="flex flex-wrap gap-3">
+                        <button id="refresh-tasks" class="btn-ghost flex items-center gap-2" type="button">
+                            <span>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M20 4l-5.58 5.59A8 8 0 016.34 17M4 20l5.58-5.59A8 8 0 0117.66 7" />
+                                </svg>
+                            </span>
+                            Refresh now
+                        </button>
+                        <button id="clear-completed" class="btn-ghost" type="button">Clear completed</button>
+                    </div>
+                </div>
+                <div class="mt-6 space-y-4" id="task-list"></div>
+                <div id="task-empty-state" class="empty-state mt-6">
+                    <h3 class="text-lg font-semibold text-gray-700">No background tasks yet</h3>
+                    <p class="text-sm text-gray-500 mt-1">Launch a background run and it will appear here automatically. Tasks persist across refreshes for a seamless workflow.</p>
+                </div>
+            </div>
+        </section>
 
         {% if task_id and background %}
         <div class="result-card">
@@ -292,87 +432,6 @@
                 <pre id="status-content" class="mt-2 text-sm"></pre>
             </div>
         </div>
-        <script>
-            // Initialize SSE for real-time progress
-            (function() {
-                const taskId = '{{ task_id }}';
-                const eventSource = new EventSource(`/progress/${taskId}`);
-                let progressHistory = [];
-                
-                eventSource.onmessage = function(event) {
-                    try {
-                        const progress = JSON.parse(event.data);
-                        progressHistory.push(progress);
-                        updateProgressUI(progress);
-                        
-                        // Auto-redirect on completion
-                        if (progress.step === 'final' && progress.status === 'completed') {
-                            setTimeout(() => {
-                                window.location.href = `/result/${taskId}`;
-                            }, 2000);
-                        }
-                    } catch (error) {
-                        console.error('Error parsing progress event:', error);
-                    }
-                };
-                
-                eventSource.onerror = function(error) {
-                    console.error('SSE error:', error);
-                    document.getElementById('progress-status').textContent = 
-                        'Connection lost. Refresh page to reconnect.';
-                    eventSource.close();
-                };
-                
-                function updateProgressUI(progress) {
-                    const step = progress.step;
-                    const status = progress.status;
-                    const message = progress.message || '';
-                    const metadata = progress.metadata || {};
-                    
-                    // Update status text
-                    document.getElementById('progress-status').textContent = 
-                        `${step.toUpperCase()}: ${status} - ${message}`;
-                    
-                    // Update step visuals
-                    const stepElement = document.querySelector(`[data-step="${step}"]`);
-                    if (stepElement) {
-                        // Remove old status classes
-                        stepElement.classList.remove('active', 'completed', 'failed');
-                        
-                        // Add current status
-                        if (status === 'starting' || status === 'running') {
-                            stepElement.classList.add('active');
-                            const icon = stepElement.querySelector('.progress-icon');
-                            icon.classList.add('active');
-                        } else if (status === 'completed') {
-                            stepElement.classList.add('completed');
-                            const icon = stepElement.querySelector('.progress-icon');
-                            icon.classList.remove('active');
-                        } else if (status === 'failed') {
-                            stepElement.classList.add('failed');
-                        }
-                        
-                        // Update message
-                        const messageDiv = stepElement.querySelector('.progress-message');
-                        messageDiv.textContent = message;
-                        
-                        // Add metadata if present
-                        if (Object.keys(metadata).length > 0) {
-                            let metadataDiv = stepElement.querySelector('.progress-metadata');
-                            if (!metadataDiv) {
-                                metadataDiv = document.createElement('div');
-                                metadataDiv.className = 'progress-metadata';
-                                stepElement.querySelector('.progress-details').appendChild(metadataDiv);
-                            }
-                            const metaText = Object.entries(metadata)
-                                .map(([k, v]) => `${k}: ${v}`)
-                                .join(', ');
-                            metadataDiv.textContent = `(${metaText})`;
-                        }
-                    }
-                }
-            })();
-        </script>
         {% endif %}
 
         {% if result %}
@@ -483,6 +542,431 @@
                 loadingOverlay.style.display = 'none';
             });
         });
+
+        (function() {
+            const STORAGE_KEY = 'myai.tasks.v1';
+            const ACTIVE_STATES = new Set(['pending', 'running', 'init', 'plan', 'gather', 'synthesize', 'reflect']);
+            const listEl = document.getElementById('task-list');
+            const emptyStateEl = document.getElementById('task-empty-state');
+            const refreshBtn = document.getElementById('refresh-tasks');
+            const clearBtn = document.getElementById('clear-completed');
+            const progressTrackerEl = document.getElementById('progress-tracker');
+            const progressStatusEl = document.getElementById('progress-status');
+
+            if (!listEl || !emptyStateEl) {
+                return;
+            }
+
+            const tasks = new Map();
+            const streams = new Map();
+            const subscribers = new Map();
+
+            const initialContext = JSON.parse('{{ {"taskId": (task_id or ""), "question": (submitted_question or ""), "background": (background or False)} | tojson | safe }}');
+
+            function init() {
+                hydrateFromStorage();
+                bindControls();
+                if (initialContext.background && initialContext.taskId) {
+                    registerTask(initialContext.taskId, initialContext.question);
+                    attachProgressTracker(initialContext.taskId);
+                } else if (progressTrackerEl && initialContext.taskId) {
+                    attachProgressTracker(initialContext.taskId);
+                }
+                fetchActiveTasks();
+            }
+
+            function hydrateFromStorage() {
+                let stored = [];
+                try {
+                    stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+                } catch (err) {
+                    stored = [];
+                }
+                stored.forEach(task => {
+                    if (!task || !task.task_id) return;
+                    tasks.set(task.task_id, task);
+                    renderTaskCard(task);
+                    if (isActive(task.status)) {
+                        connectStream(task.task_id);
+                    }
+                });
+                updateEmptyState();
+            }
+
+            function persist() {
+                try {
+                    const payload = Array.from(tasks.values())
+                        .slice(0, 25)
+                        .map(task => ({
+                            task_id: task.task_id,
+                            question: task.question,
+                            status: task.status,
+                            created_at: task.created_at,
+                            last_progress: task.last_progress || null
+                        }));
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+                } catch (err) {
+                    console.warn('Unable to persist task dashboard state', err);
+                }
+            }
+
+            function bindControls() {
+                if (refreshBtn) {
+                    refreshBtn.addEventListener('click', () => {
+                        refreshBtn.classList.add('opacity-60');
+                        fetchActiveTasks().finally(() => refreshBtn.classList.remove('opacity-60'));
+                    });
+                }
+                if (clearBtn) {
+                    clearBtn.addEventListener('click', () => {
+                        Array.from(tasks.values())
+                            .filter(task => task.status === 'completed' || task.status === 'failed')
+                            .forEach(task => removeTask(task.task_id, { localOnly: true }));
+                        persist();
+                        updateEmptyState();
+                    });
+                }
+            }
+
+            function fetchActiveTasks() {
+                return fetch('/tasks/active')
+                    .then(resp => resp.ok ? resp.json() : Promise.reject(resp.status))
+                    .then(data => {
+                        (data.tasks || []).forEach(task => {
+                            if (!task.task_id) return;
+                            upsertTask(task);
+                        });
+                        updateEmptyState();
+                    })
+                    .catch(err => console.warn('Unable to fetch active tasks', err));
+            }
+
+            function registerTask(taskId, question) {
+                if (!taskId) {
+                    return;
+                }
+                const nowIso = new Date().toISOString();
+                const existing = tasks.get(taskId) || {};
+                const payload = Object.assign({}, existing, {
+                    task_id: taskId,
+                    question: question || existing.question || 'Background research task',
+                    status: existing.status || 'pending',
+                    created_at: existing.created_at || nowIso
+                });
+                tasks.set(taskId, payload);
+                renderTaskCard(payload);
+                connectStream(taskId);
+                updateEmptyState();
+                persist();
+            }
+
+            function upsertTask(patch) {
+                const id = patch.task_id;
+                if (!id) return;
+                const existing = tasks.get(id) || {};
+                const merged = Object.assign({}, existing, patch);
+                tasks.set(id, merged);
+                renderTaskCard(merged);
+                if (isActive(merged.status)) {
+                    connectStream(id);
+                } else {
+                    stopStream(id);
+                }
+                updateEmptyState();
+                persist();
+            }
+
+            function isActive(status) {
+                return ACTIVE_STATES.has((status || '').toLowerCase());
+            }
+
+            function renderTaskCard(task) {
+                let card = listEl.querySelector(`[data-task-id="${task.task_id}"]`);
+                if (!card) {
+                    card = document.createElement('div');
+                    card.className = 'task-card';
+                    card.dataset.taskId = task.task_id;
+                    card.innerHTML = `
+                        <div class="flex items-start justify-between gap-4">
+                            <div>
+                                <p class="text-xs uppercase text-gray-400 tracking-wide">Question</p>
+                                <p class="text-gray-900 font-semibold text-lg" data-role="question"></p>
+                            </div>
+                            <div class="status-pill pending" data-role="status-pill">
+                                <span class="pulse-dot"></span>
+                                <span data-role="status-text">Pending</span>
+                            </div>
+                        </div>
+                        <p class="mt-3 text-sm text-gray-500">Task ID:
+                            <code class="bg-gray-100 px-2 py-0.5 rounded text-gray-700" data-role="task-id"></code>
+                        </p>
+                        <p class="text-xs text-gray-400 mt-1" data-role="timestamps"></p>
+                        <p class="text-sm text-gray-600 mt-3" data-role="progress-copy">Waiting for updates...</p>
+                        <div class="task-actions mt-4 flex flex-wrap gap-2">
+                            <button data-action="view" type="button">View report</button>
+                            <button data-action="status" type="button">Open status</button>
+                            <button data-action="copy" type="button">Copy ID</button>
+                            <button data-action="remove" type="button">Remove</button>
+                        </div>`;
+                    listEl.prepend(card);
+                    bindCardActions(card, task.task_id);
+                }
+
+                const questionEl = card.querySelector('[data-role="question"]');
+                const statusPill = card.querySelector('[data-role="status-pill"]');
+                const statusText = card.querySelector('[data-role="status-text"]');
+                const taskIdEl = card.querySelector('[data-role="task-id"]');
+                const timestampEl = card.querySelector('[data-role="timestamps"]');
+                const progressCopyEl = card.querySelector('[data-role="progress-copy"]');
+                const viewButton = card.querySelector('[data-action="view"]');
+
+                if (questionEl) {
+                    questionEl.textContent = task.question || 'Untitled background task';
+                }
+                if (taskIdEl) {
+                    taskIdEl.textContent = task.task_id;
+                }
+                if (timestampEl) {
+                    timestampEl.textContent = formatTimestamp(task.created_at, task.completed_at);
+                }
+                if (progressCopyEl) {
+                    progressCopyEl.textContent = describeProgress(task);
+                }
+
+                if (statusPill && statusText) {
+                    const normalized = (task.status || 'pending').toLowerCase();
+                    statusPill.className = `status-pill ${normalized}`;
+                    if (!isActive(normalized)) {
+                        statusPill.querySelector('.pulse-dot')?.classList.remove('animate-ping');
+                    }
+                    statusText.textContent = formatStatusLabel(normalized);
+                }
+
+                if (viewButton) {
+                    viewButton.disabled = task.status !== 'completed';
+                    viewButton.classList.toggle('opacity-40', viewButton.disabled);
+                }
+            }
+
+            function bindCardActions(card, taskId) {
+                card.querySelector('[data-action="copy"]').addEventListener('click', () => copyTaskId(taskId, card));
+                card.querySelector('[data-action="status"]').addEventListener('click', () => window.open(`/status/${taskId}`, '_blank'));
+                card.querySelector('[data-action="view"]').addEventListener('click', () => window.open(`/result/${taskId}`, '_blank'));
+                card.querySelector('[data-action="remove"]').addEventListener('click', () => removeTask(taskId));
+            }
+
+            function copyTaskId(taskId, card) {
+                navigator.clipboard?.writeText(taskId)
+                    .then(() => flashMessage(card, 'Copied to clipboard'))
+                    .catch(() => {
+                        const temp = document.createElement('textarea');
+                        temp.value = taskId;
+                        document.body.appendChild(temp);
+                        temp.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(temp);
+                        flashMessage(card, 'Copied to clipboard');
+                    });
+            }
+
+            function flashMessage(card, text) {
+                const badge = document.createElement('span');
+                badge.className = 'badge-soft absolute top-3 right-4';
+                badge.textContent = text;
+                card.appendChild(badge);
+                setTimeout(() => badge.remove(), 1600);
+            }
+
+            function removeTask(taskId, options = {}) {
+                stopStream(taskId);
+                subscribers.delete(taskId);
+                tasks.delete(taskId);
+                const card = listEl.querySelector(`[data-task-id="${taskId}"]`);
+                if (card) {
+                    card.remove();
+                }
+                if (!options.localOnly) {
+                    persist();
+                }
+                updateEmptyState();
+            }
+
+            function updateEmptyState() {
+                const hasTasks = listEl.querySelectorAll('.task-card').length > 0;
+                emptyStateEl.classList.toggle('hidden', hasTasks);
+            }
+
+            function connectStream(taskId) {
+                if (streams.has(taskId)) {
+                    return;
+                }
+                const source = new EventSource(`/progress/${taskId}`);
+                streams.set(taskId, source);
+                source.onmessage = event => {
+                    try {
+                        const progress = JSON.parse(event.data);
+                        const entry = tasks.get(taskId) || { task_id: taskId };
+                        entry.last_progress = progress;
+                        if (progress.status === 'running') {
+                            entry.status = 'running';
+                        }
+                        if (progress.step === 'final') {
+                            entry.status = progress.status;
+                            entry.completed_at = new Date().toISOString();
+                        }
+                        tasks.set(taskId, entry);
+                        renderTaskCard(entry);
+                        notify(taskId, progress);
+                        persist();
+                        if (progress.step === 'final') {
+                            stopStream(taskId);
+                        }
+                    } catch (err) {
+                        console.warn('Unable to parse progress message', err);
+                    }
+                };
+                source.onerror = () => {
+                    stopStream(taskId);
+                    if (isActive(tasks.get(taskId)?.status)) {
+                        setTimeout(() => connectStream(taskId), 4000);
+                    }
+                };
+            }
+
+            function stopStream(taskId) {
+                const source = streams.get(taskId);
+                if (source) {
+                    source.close();
+                    streams.delete(taskId);
+                }
+            }
+
+            function subscribe(taskId, handler) {
+                if (!subscribers.has(taskId)) {
+                    subscribers.set(taskId, new Set());
+                }
+                subscribers.get(taskId).add(handler);
+                return () => subscribers.get(taskId)?.delete(handler);
+            }
+
+            function notify(taskId, payload) {
+                if (!subscribers.has(taskId)) {
+                    return;
+                }
+                subscribers.get(taskId).forEach(handler => handler(payload));
+            }
+
+            function describeProgress(task) {
+                const progress = task.last_progress;
+                if (!progress) {
+                    return task.status === 'completed'
+                        ? 'Completed. Download the report when ready.'
+                        : 'Waiting for live updates...';
+                }
+                const step = capitalize(progress.step || 'step');
+                const status = capitalize(progress.status || 'running');
+                const message = progress.message ? ` — ${progress.message}` : '';
+                return `${step} · ${status}${message}`;
+            }
+
+            function formatStatusLabel(status) {
+                switch (status) {
+                    case 'running':
+                        return 'Running';
+                    case 'completed':
+                        return 'Completed';
+                    case 'failed':
+                        return 'Failed';
+                    default:
+                        return 'Pending';
+                }
+            }
+
+            function formatTimestamp(started, completed) {
+                if (!started) {
+                    return '';
+                }
+                const startDate = new Date(started);
+                const base = `Started ${startDate.toLocaleString()}`;
+                if (completed) {
+                    const done = new Date(completed);
+                    return `${base} · Completed ${done.toLocaleString()}`;
+                }
+                return base;
+            }
+
+            function capitalize(text) {
+                if (!text) return '';
+                return text.charAt(0).toUpperCase() + text.slice(1);
+            }
+
+            function attachProgressTracker(taskId) {
+                if (!progressTrackerEl || !taskId) {
+                    return;
+                }
+                progressTrackerEl.dataset.subscription = taskId;
+                subscribe(taskId, progress => {
+                    updateProgressUI(progress, taskId);
+                });
+                // Prime UI with last-known progress if available
+                const entry = tasks.get(taskId);
+                if (entry?.last_progress) {
+                    updateProgressUI(entry.last_progress, taskId);
+                }
+            }
+
+            function updateProgressUI(progress, taskId) {
+                if (!progressTrackerEl) {
+                    return;
+                }
+                if (progressStatusEl) {
+                    progressStatusEl.textContent = `${(progress.step || '').toUpperCase()}: ${progress.status} - ${progress.message || ''}`;
+                }
+                const stepElement = progressTrackerEl.querySelector(`[data-step="${progress.step}"]`);
+                if (stepElement) {
+                    stepElement.classList.remove('active', 'completed', 'failed');
+                    const icon = stepElement.querySelector('.progress-icon');
+                    icon?.classList.remove('active');
+                    if (progress.status === 'starting' || progress.status === 'running') {
+                        stepElement.classList.add('active');
+                        icon?.classList.add('active');
+                    } else if (progress.status === 'completed') {
+                        stepElement.classList.add('completed');
+                    } else if (progress.status === 'failed') {
+                        stepElement.classList.add('failed');
+                    }
+                    const messageDiv = stepElement.querySelector('.progress-message');
+                    if (messageDiv) {
+                        messageDiv.textContent = progress.message || '';
+                    }
+                    if (progress.metadata) {
+                        let metadataDiv = stepElement.querySelector('.progress-metadata');
+                        if (!metadataDiv) {
+                            metadataDiv = document.createElement('div');
+                            metadataDiv.className = 'progress-metadata';
+                            stepElement.querySelector('.progress-details').appendChild(metadataDiv);
+                        }
+                        metadataDiv.textContent = Object.entries(progress.metadata)
+                            .map(([k, v]) => `${k}: ${v}`)
+                            .join(', ');
+                    }
+                }
+
+                if (progress.step === 'final' && progress.status === 'completed' && taskId) {
+                    setTimeout(() => {
+                        window.location.href = `/result/${taskId}`;
+                    }, 2000);
+                }
+            }
+
+            init();
+            window.TaskDashboard = {
+                registerTask,
+                subscribe,
+                refresh: fetchActiveTasks,
+                remove: removeTask
+            };
+        })();
 
         function checkStatus(taskId) {
             fetch(`/status/${taskId}`)

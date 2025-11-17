@@ -274,6 +274,9 @@ class StormAgent:
             if pubmed_results:
                 print(f"[DEBUG] First PubMed result: {pubmed_results[0].get('title', 'NO TITLE')[:80]}")
             
+            # Log results from each source
+            print(f"[Gather] Question {idx}: PubMed={len(pubmed_results)}, Exa={len(exa_results)}, ArXiv={len(arxiv_results)}")
+            
             state.articles.extend(pubmed_results)
             state.articles.extend(exa_results)
             state.articles.extend(arxiv_results)

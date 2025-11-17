@@ -227,12 +227,14 @@ def progress_stream(task_id):
 def index():
     result = None
     task_id = None
+    submitted_question = None
     
     if request.method == 'POST':
         question = request.form.get('question')
         background = request.form.get('background') == 'on'
         
         if question:
+            submitted_question = question
             # Defensive parsing: if the form fields are empty or invalid,
             # fall back to sensible defaults.
             def safe_int(val, default):
@@ -272,7 +274,8 @@ def index():
                         logger.warning(f"webui: rejecting new background task; tasks {running_tasks} still in progress")
                         return render_template('index.html',
                                               result={'error': f'A research task is already running (task IDs: {running_tasks}). Please wait for it to complete before starting a new one.'},
-                                              request=request), 409
+                                              request=request,
+                                              submitted_question=submitted_question), 409
                 
                 task_id = str(uuid.uuid4())
                 with tasks_lock:
@@ -298,7 +301,8 @@ def index():
                                       result=None, 
                                       request=request, 
                                       task_id=task_id, 
-                                      background=background)
+                                      background=background,
+                                      submitted_question=submitted_question)
 
             # Run synchronously (original behavior)
             logger.info("webui: calling test_research_endpoint with base_url=%s", base_url)
@@ -340,7 +344,7 @@ def index():
             # Also save the fully rendered HTML to a temporary file so external
             # automation can capture the report even if the client times out.
             try:
-                rendered = render_template('index.html', result=result, request=request)
+                rendered = render_template('index.html', result=result, request=request, submitted_question=submitted_question)
                 tmp_path = os.environ.get('MYAI_RENDERED_OUTPUT', '/tmp/research_report.html')
                 # Write atomically: write to a .tmp file then rename
                 tmp_write = tmp_path + '.tmp'
@@ -380,7 +384,19 @@ def index():
             except Exception:
                 logger.exception('webui: failed to save rendered HTML')
 
-    return render_template('index.html', result=result, request=request)
+    return render_template('index.html', result=result, request=request, submitted_question=submitted_question)
+
+
+def _serialize_task(task_id, task):
+    """Normalize a task dict for API responses."""
+    return {
+        "task_id": task_id,
+        "question": task.get('question'),
+        "status": task.get('status'),
+        "created_at": task.get('created_at'),
+        "started_at": task.get('started_at'),
+        "completed_at": task.get('completed_at'),
+    }
 
 
 @app.route('/status/<task_id>')
@@ -415,6 +431,20 @@ def task_status(task_id):
                 response['report_preview'] = str(getattr(result, 'answer', ''))[:500] + '...'
     
     return jsonify(response)
+
+
+@app.route('/tasks/active')
+def active_tasks():
+    """Return the most recent tasks for dashboard rendering."""
+    with tasks_lock:
+        items = [
+            _serialize_task(tid, t)
+            for tid, t in tasks.items()
+        ]
+
+    # Sort newest first and trim to a reasonable number for the UI
+    items.sort(key=lambda t: t.get('created_at') or '', reverse=True)
+    return jsonify({"tasks": items[:20]})
 
 
 @app.route('/result/<task_id>')

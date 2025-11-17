@@ -114,7 +114,7 @@ def exa_search_tool(query: str, num_results: int = 5, api_key: Optional[str] = N
 @tool
 def arxiv_search_tool(query: str, max_results: int = 5) -> List[dict]:
     """
-    Searches for academic papers on Arxiv.
+    Searches for academic papers on Arxiv with exponential backoff for rate limiting.
 
     Args:
         query: The query to search for.
@@ -123,28 +123,62 @@ def arxiv_search_tool(query: str, max_results: int = 5) -> List[dict]:
     Returns:
         A list of papers, where each paper is a dictionary with proper url/source fields.
     """
-    search = arxiv.Search(
-        query=query,
-        max_results=max_results,
-        sort_by=arxiv.SortCriterion.Relevance,
-    )
+    import time
+    from urllib.error import HTTPError
     
-    results = []
-    for result in search.results():
-        results.append(
-            {
-                "title": result.title,
-                "authors": [author.name for author in result.authors],
-                "summary": result.summary,
-                "text": result.summary,  # Add 'text' field for consistency
-                "published": result.published.isoformat(),
-                "pdf_url": result.pdf_url,
-                "url": result.entry_id,  # Add 'url' field pointing to arxiv entry
-                "source": "arxiv.org",   # Add 'source' field
-                "entry_id": result.entry_id,
-            }
-        )
-    return results
+    max_retries = 5
+    base_delay = 3  # Start with 3 seconds
+    
+    for attempt in range(max_retries):
+        try:
+            search = arxiv.Search(
+                query=query,
+                max_results=max_results,
+                sort_by=arxiv.SortCriterion.Relevance,
+            )
+            
+            results = []
+            for result in search.results():
+                results.append(
+                    {
+                        "title": result.title,
+                        "authors": [author.name for author in result.authors],
+                        "summary": result.summary,
+                        "text": result.summary,  # Add 'text' field for consistency
+                        "published": result.published.isoformat(),
+                        "pdf_url": result.pdf_url,
+                        "url": result.entry_id,  # Add 'url' field pointing to arxiv entry
+                        "source": "arxiv.org",   # Add 'source' field
+                        "entry_id": result.entry_id,
+                    }
+                )
+            
+            print(f"[ArXiv] Successfully retrieved {len(results)} papers for query: {query[:60]}...")
+            return results
+            
+        except HTTPError as e:
+            if e.code == 429:  # Rate limit exceeded
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 3s, 6s, 12s, 24s
+                    delay = base_delay * (2 ** attempt)
+                    print(f"[ArXiv] Rate limit hit (429). Retrying in {delay}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(delay)
+                else:
+                    print(f"[ArXiv] Rate limit exceeded after {max_retries} attempts. Returning empty results.")
+                    return []  # Return empty list instead of crashing
+            else:
+                # Other HTTP errors
+                print(f"[ArXiv] HTTP error {e.code}: {e.reason}. Returning empty results.")
+                return []
+                
+        except Exception as e:
+            # Catch any other errors (network issues, parsing errors, etc.)
+            print(f"[ArXiv] Unexpected error: {type(e).__name__}: {e}. Returning empty results.")
+            return []
+    
+    # If we exhausted all retries
+    print(f"[ArXiv] All retry attempts exhausted. Returning empty results.")
+    return []
 
 
 def _pubmed_common_params() -> dict:
