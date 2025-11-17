@@ -9,7 +9,12 @@ import os
 import json
 
 from myai.llm_manager import LLMManager
-from myai.tools import exa_search_tool, arxiv_search_tool, llama_parse_tool
+from myai.tools import (
+    exa_search_tool,
+    arxiv_search_tool,
+    llama_parse_tool,
+    pubmed_search_tool,
+)
 from myai.adaptive_llm import AdaptiveLLMHandler
 from myai.runtime_limits import RuntimeGuard, RuntimeLimitExceeded, resolve_runtime_limit_seconds
 
@@ -237,6 +242,21 @@ class StormAgent:
                             f"Searching for articles ({len(state.questions)} questions)...")
         
         total_questions = len(state.questions)
+
+        def _parse_cap(val):
+            if not val:
+                return None
+            try:
+                parsed = int(val)
+                return parsed if parsed > 0 else None
+            except (ValueError, TypeError):
+                return None
+
+        default_cap = _parse_cap(os.environ.get("MYAI_MAX_ARTICLES")) or 40
+        cpu_cap = _parse_cap(os.environ.get("MYAI_CPU_MAX_ARTICLES")) or 18
+        article_cap = default_cap
+        if self.adaptive_handler.cpu_only_mode and cpu_cap:
+            article_cap = min(article_cap, cpu_cap)
         for idx, question in enumerate(state.questions, 1):
             self._ensure_runtime_budget(state, f"gather-q{idx}")
             print(f"Searching for: {question}")
@@ -248,13 +268,33 @@ class StormAgent:
             exa_results = exa_search_tool.invoke({"query": question, "api_key": os.environ.get("EXA_API_KEY")})
             arxiv_results = arxiv_search_tool.invoke(question)
             
+            print(f"[DEBUG] About to call PubMed with query: {question}")
+            pubmed_results = pubmed_search_tool.invoke({"query": question, "max_results": 5})
+            print(f"[DEBUG] PubMed returned {len(pubmed_results)} results")
+            if pubmed_results:
+                print(f"[DEBUG] First PubMed result: {pubmed_results[0].get('title', 'NO TITLE')[:80]}")
+            
+            state.articles.extend(pubmed_results)
             state.articles.extend(exa_results)
             state.articles.extend(arxiv_results)
         
         num_articles = len(state.articles)
+        trimmed_from = None
+        if article_cap and num_articles > article_cap:
+            trimmed_from = num_articles
+            state.articles = state.articles[:article_cap]
+            num_articles = article_cap
+            print(
+                f"[INFO] CPU-friendly article cap applied: trimmed {trimmed_from} -> {num_articles} (cpu_only={self.adaptive_handler.cpu_only_mode})"
+            )
+
+        status_msg = f"Gathered {num_articles} articles"
+        if trimmed_from:
+            status_msg += " (capped for CPU mode)"
+
         self._report_progress("gather", "completed", 
-                            f"Gathered {num_articles} articles",
-                            {"num_articles": num_articles})
+                        status_msg,
+                        {"num_articles": num_articles, "trimmed_from": trimmed_from})
         
         # Example of using LlamaParse (you would typically have a separate step for this)
         # For demonstration, let's assume we have a PDF file to parse.
@@ -278,7 +318,8 @@ class StormAgent:
         
         # Check if we should use chunked processing
         total_chars = sum(len(article.get("text", "") or article.get("summary", "")) for article in state.articles)
-        use_chunking = total_chars > 15000 or len(state.articles) > 8
+        # Use higher threshold to reduce chunking frequency (fewer LLM calls)
+        use_chunking = total_chars > 20000 or len(state.articles) > 12
         
         if use_chunking:
             print(f"[INFO] Using chunked synthesis for {len(state.articles)} articles ({total_chars} chars)")

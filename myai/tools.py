@@ -2,7 +2,11 @@
 Specialized tools for the research agent, including LlamaParse, Exa API, and Arxiv API.
 """
 import os
+from datetime import datetime
 from typing import List, Optional
+import xml.etree.ElementTree as ET
+
+import requests
 
 from langchain.tools import tool
 from llama_parse import LlamaParse
@@ -16,6 +20,14 @@ LLAMA_CLOUD_API_KEY = os.environ.get("LLAMA_CLOUD_API_KEY")
 
 # Exa API Key
 EXA_API_KEY = os.environ.get("EXA_API_KEY")
+
+# PubMed / NCBI configuration
+NCBI_API_KEY = os.environ.get("NCBI_API_KEY")
+NCBI_TOOL_NAME = os.environ.get("NCBI_TOOL_NAME", "myai-research-agent")
+NCBI_CONTACT_EMAIL = os.environ.get("NCBI_CONTACT_EMAIL")
+
+PUBMED_ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+PUBMED_EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 
 # --- LlamaParse Tool ---
 
@@ -133,6 +145,187 @@ def arxiv_search_tool(query: str, max_results: int = 5) -> List[dict]:
             }
         )
     return results
+
+
+def _pubmed_common_params() -> dict:
+    params = {}
+    if NCBI_API_KEY:
+        params["api_key"] = NCBI_API_KEY
+    if NCBI_TOOL_NAME:
+        params["tool"] = NCBI_TOOL_NAME
+    if NCBI_CONTACT_EMAIL:
+        params["email"] = NCBI_CONTACT_EMAIL
+    return params
+
+
+def _pubmed_date_to_iso(pub_date_elem: ET.Element | None) -> Optional[str]:
+    if pub_date_elem is None:
+        return None
+
+    year = (pub_date_elem.findtext("Year") or "").strip()
+    if not year:
+        medline = pub_date_elem.findtext("MedlineDate")
+        return medline.strip() if medline else None
+
+    month_raw = (pub_date_elem.findtext("Month") or "").strip()
+    day_raw = (pub_date_elem.findtext("Day") or "").strip()
+    month_lookup = {
+        "Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04",
+        "May": "05", "Jun": "06", "Jul": "07", "Aug": "08",
+        "Sep": "09", "Oct": "10", "Nov": "11", "Dec": "12",
+    }
+    month = month_lookup.get(month_raw[:3], "01") if month_raw else "01"
+    day = day_raw if day_raw.isdigit() else "01"
+    try:
+        dt = datetime(int(year), int(month), int(day))
+        return dt.date().isoformat()
+    except ValueError:
+        return year
+
+
+def _extract_pubmed_abstract(article_elem: ET.Element) -> str:
+    abstract_parts = []
+    for abs_elem in article_elem.findall(".//Article/Abstract/AbstractText"):
+        text = "".join(abs_elem.itertext()).strip()
+        label = abs_elem.get("Label")
+        if label:
+            text = f"{label}: {text}" if text else label
+        if text:
+            abstract_parts.append(text)
+    return "\n".join(abstract_parts)
+
+
+def _extract_pubmed_authors(article_elem: ET.Element) -> List[str]:
+    authors = []
+    for author in article_elem.findall(".//Article/AuthorList/Author"):
+        collective = author.findtext("CollectiveName")
+        if collective:
+            name = collective.strip()
+        else:
+            first = author.findtext("ForeName") or author.findtext("Initials")
+            last = author.findtext("LastName")
+            parts = [part.strip() for part in (first, last) if part]
+            name = " ".join(parts)
+        if name:
+            authors.append(name)
+    return authors
+
+
+def _extract_keywords_from_question(question: str) -> str:
+    """Extract scientific keywords from a natural language question for PubMed search.
+    
+    PubMed works better with keywords than full questions. This function removes
+    question words and common phrases while preserving scientific terminology.
+    """
+    import re
+    
+    # First, normalize scientific terms before lowercasing
+    # Replace "ecoli" or "e coli" with proper "E. coli"
+    question = re.sub(r'\be\.?\s*coli\b', 'E. coli', question, flags=re.IGNORECASE)
+    
+    # Now process the question
+    keywords = question
+    
+    # Remove question starters (case insensitive)
+    keywords = re.sub(r'^\s*(what|how|why|when|where|who|which|does|do|is|are|can)\s+(is|are|does|do|happens?|occurs?|affects?|causes?|results?|leads to|key aspects|aspects)\s+', '', keywords, flags=re.IGNORECASE)
+    keywords = re.sub(r'^\s*(what|how|why|when|where|who|which)\s+', '', keywords, flags=re.IGNORECASE)
+    
+    # Remove filler phrases and words
+    keywords = re.sub(r'\b(the|a|an|in|on|at|to|for|of|with|from|by|about|when|left|placed|put|added|happens|occur|results?|leads to|what|key|aspects)\b', ' ', keywords, flags=re.IGNORECASE)
+    
+    # Remove question marks and extra punctuation at the end
+    keywords = re.sub(r'[?!;:]+$', '', keywords)
+    
+    # Clean up extra spaces
+    keywords = ' '.join(keywords.split())
+    
+    return keywords if keywords else question
+
+
+@tool
+def pubmed_search_tool(query: str, max_results: int = 5) -> List[dict]:
+    """Searches the PubMed biomedical literature database.
+
+    Args:
+        query: Biomedical search query (can be a question or keywords).
+        max_results: Maximum number of PubMed articles to return.
+
+    Returns:
+        A list of article dictionaries containing metadata and abstract text.
+    """
+
+    if not query:
+        return []
+
+    # Extract keywords from natural language questions for better PubMed matching
+    search_term = _extract_keywords_from_question(query)
+    print(f"[DEBUG pubmed] Original query: {query}")
+    print(f"[DEBUG pubmed] Search term: {search_term}")
+
+    params = {
+        "db": "pubmed",
+        "term": search_term,
+        "retmode": "json",
+        "retmax": max_results,
+        "sort": "relevance",
+    }
+    params.update(_pubmed_common_params())
+
+    try:
+        esearch_resp = requests.get(PUBMED_ESEARCH_URL, params=params, timeout=15)
+        esearch_resp.raise_for_status()
+        data = esearch_resp.json()
+        id_list = data.get("esearchresult", {}).get("idlist", [])
+    except Exception as exc:
+        print(f"[WARN pubmed_search_tool] esearch failed: {exc}; returning [].")
+        return []
+
+    if not id_list:
+        return []
+
+    fetch_params = {
+        "db": "pubmed",
+        "id": ",".join(id_list),
+        "retmode": "xml",
+    }
+    fetch_params.update(_pubmed_common_params())
+
+    try:
+        efetch_resp = requests.get(PUBMED_EFETCH_URL, params=fetch_params, timeout=20)
+        efetch_resp.raise_for_status()
+        root = ET.fromstring(efetch_resp.text)
+    except Exception as exc:
+        print(f"[WARN pubmed_search_tool] efetch failed: {exc}; returning [].")
+        return []
+
+    articles = []
+    for article in root.findall(".//PubmedArticle"):
+        pmid = (article.findtext(".//MedlineCitation/PMID") or "").strip()
+        title = (article.findtext(".//Article/ArticleTitle") or "").strip()
+        abstract_text = _extract_pubmed_abstract(article)
+        authors = _extract_pubmed_authors(article)
+        pub_date = _pubmed_date_to_iso(article.find(".//JournalIssue/PubDate"))
+        journal = (article.findtext(".//Journal/Title") or "").strip()
+
+        entry = {
+            "title": title or f"PubMed Article {pmid}",
+            "authors": authors,
+            "summary": abstract_text,
+            "text": abstract_text,
+            "published": pub_date,
+            "journal": journal,
+            "pmid": pmid,
+            "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else None,
+            "source": "pubmed.ncbi.nlm.nih.gov",
+        }
+        if abstract_text:
+            articles.append(entry)
+        else:
+            # Even without an abstract we keep minimal metadata for completeness.
+            entry["text"] = entry["summary"] = journal or ""
+            articles.append(entry)
+
+    return articles
 
 # Example usage:
 if __name__ == "__main__":

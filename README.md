@@ -204,6 +204,85 @@ bash scripts/start_ramalama_dynamic.sh granite4:small-h 8080 research-agent myai
 # CPU-only (integrated GPUs or < 4GB VRAM):
 # ramalama serve --network=myai-net --port 8080 --name research-agent --ngl 0 granite4:small-h -d 
 
+> **Memory sizing for granite4:small-h:**
+> 
+> The 32B `granite4:small-h` model loads ~18 GiB of weights plus an 8 GiB
+> prompt cache by default (26 GiB total). **On systems with ≥32 GiB free RAM**,
+> the default command above works well. If your host has 64 GB total RAM and
+> other services consuming <32 GB, `granite4:small-h` should run stably.
+>
+> **For hosts with 16–24 GiB free RAM**, reduce or disable the prompt cache:
+>
+> ```bash
+> # Reduce cache to 2 GiB (model + cache = ~20 GiB)
+> uvx ramalama serve --network=myai-net --image quay.io/ramalama/ramalama \
+>   --port 8080 --name research-agent --ngl 0 --cache-ram 2048 granite4:small-h -d
+> 
+> # Or disable cache entirely (model only = ~18 GiB)
+> uvx ramalama serve --network=myai-net --image quay.io/ramalama/ramalama \
+>   --port 8080 --name research-agent --ngl 0 --cache-ram 0 granite4:small-h -d
+> ```
+>
+> **For test/CI environments or hosts with <16 GiB free**, use the 2B `granite`:
+>
+> ```bash
+> uvx ramalama serve --network=myai-net --image quay.io/ramalama/ramalama \
+>   --port 8080 --name research-agent --ngl 0 --cache-ram 0 granite -d
+> ```
+>
+> The 2B model keeps RAM usage under ~4 GiB and has been verified stable
+> during `uv run pytest`. Point the agent at the server via
+> `RAMALAMA_HOST=research-agent` / `RAMALAMA_PORT=8080`.
+>
+> **Diagnosing crashes on high-memory systems:**
+>
+> If the container still crashes despite having sufficient RAM:
+>
+> 1. **Check for OOM kills in kernel logs:**
+>    ```bash
+>    sudo journalctl -k | grep -i "oom\|killed process"
+>    ```
+>
+> 2. **Inspect container exit code and last logs:**
+>    ```bash
+>    podman inspect research-agent | grep -A 5 "ExitCode\|OOMKilled"
+>    podman logs research-agent --tail 100
+>    ```
+>
+> 3. **Monitor real-time memory usage during startup:**
+>    ```bash
+>    watch -n 1 'podman stats --no-stream research-agent'
+>    ```
+>
+> 4. **Check for insufficient swap or cgroup limits:**
+>    ```bash
+>    # Verify host swap is available
+>    free -h
+>    
+>    # Check if container has memory limits set
+>    podman inspect research-agent | grep -i memory
+>    ```
+>
+> 5. **Common non-OOM failure causes:**
+>    - Model file corruption (re-pull with `ramalama pull granite4:small-h`)
+>    - Incompatible GGUF version (update ramalama: `pip install -U ramalama`)
+>    - GPU driver conflicts when `--ngl 0` isn't honored (verify with `lspci | grep VGA`)
+>    - Podman/container runtime issues (check `podman version` and update if needed)
+>
+> If the container exits immediately after "server is listening", the model
+> is likely healthy and crashes are due to request-time issues. Enable debug
+> logging and retry a simple completion:
+>
+> ```bash
+> # Enable verbose logging
+> podman logs -f research-agent &
+> 
+> # Test with minimal completion
+> curl -X POST http://localhost:8080/v1/completions \
+>   -H "Content-Type: application/json" \
+>   -d '{"prompt": "Hello", "max_tokens": 5}'
+> ```
+
 # Optional: run Redis on the same network (recommended for production caching)
 podman run -d --name myai-redis --network=myai-net \
     -v myai-redis-data:/data \
@@ -286,8 +365,17 @@ A production-ready web UI with **background task support** is available to inter
         # Recommended: create a user network so the agent container can reach RamaLama by name
         podman network create myai-net || true
 
-        # Run the web UI on the same network as your RamaLama server. The web UI listens on 8081.
-        podman run -d --name myai-webui --network myai-net -p 8081:8081 myai-webui
+    # Run the web UI on the same network as your RamaLama server. The web UI listens on 8081.
+    # CPU-only defaults keep RamaLama in safe mode on shared hosts.
+    podman run -d --name myai-webui --network myai-net -p 8081:8081 \
+        -e CPU_ONLY_MODE=1 -e GPU_LAYERS=0 myai-webui
+
+> **CPU-only deployments**
+>
+> Set `CPU_ONLY_MODE=1` and `GPU_LAYERS=0` for every web UI or API deployment when no
+> dedicated GPU is available. These hints allow the Adaptive LLM handler to extend timeouts,
+> shrink chunk sizes, and avoid partial results during long synthesis runs (for example, the
+> EDTA timeout regression we recently fixed).
     ```
 
 3.  **Open your browser:**

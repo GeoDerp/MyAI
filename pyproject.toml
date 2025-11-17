@@ -25,6 +25,7 @@ dependencies = [
     "pydantic>=2.12.0",
     "flask>=2.3.0",
     "pydantic-ai>=0.1.0",
+    "requests>=2.32.0",
 ]
 
 [project.optional-dependencies]

@@ -4,7 +4,12 @@ Tests for the specialized tools.
 import unittest
 from unittest.mock import patch, MagicMock
 
-from myai.tools import llama_parse_tool, exa_search_tool, arxiv_search_tool
+from myai.tools import (
+    llama_parse_tool,
+    exa_search_tool,
+    arxiv_search_tool,
+    pubmed_search_tool,
+)
 
 class TestTools(unittest.TestCase):
     """
@@ -72,6 +77,57 @@ class TestTools(unittest.TestCase):
 
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["title"], "Test Paper")
+
+    @patch("myai.tools.requests.get")
+    def test_pubmed_search_tool(self, mock_get):
+        """Ensures PubMed search parses XML responses."""
+
+        mock_esearch = MagicMock()
+        mock_esearch.raise_for_status = MagicMock()
+        mock_esearch.json.return_value = {"esearchresult": {"idlist": ["12345"]}}
+
+        mock_efetch = MagicMock()
+        mock_efetch.raise_for_status = MagicMock()
+        mock_efetch.text = """
+            <PubmedArticleSet>
+                <PubmedArticle>
+                    <MedlineCitation>
+                        <PMID>12345</PMID>
+                        <Article>
+                            <ArticleTitle>Impact of EDTA on E. coli</ArticleTitle>
+                            <Abstract>
+                                <AbstractText Label=\"Summary\">EDTA disrupts the outer membrane.</AbstractText>
+                            </Abstract>
+                            <AuthorList>
+                                <Author>
+                                    <ForeName>Jane</ForeName>
+                                    <LastName>Doe</LastName>
+                                </Author>
+                            </AuthorList>
+                            <Journal>
+                                <Title>Microbiology Letters</Title>
+                                <JournalIssue>
+                                    <PubDate>
+                                        <Year>2024</Year>
+                                        <Month>Jan</Month>
+                                        <Day>15</Day>
+                                    </PubDate>
+                                </JournalIssue>
+                            </Journal>
+                        </Article>
+                    </MedlineCitation>
+                </PubmedArticle>
+            </PubmedArticleSet>
+        """
+
+        mock_get.side_effect = [mock_esearch, mock_efetch]
+
+        results = pubmed_search_tool.invoke({"query": "EDTA"})
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["title"], "Impact of EDTA on E. coli")
+        self.assertIn("EDTA", results[0]["text"])
+        self.assertEqual(results[0]["authors"], ["Jane Doe"])
 
 if __name__ == "__main__":
     unittest.main()

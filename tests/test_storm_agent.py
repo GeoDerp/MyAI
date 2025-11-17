@@ -46,18 +46,22 @@ class TestStormAgent(unittest.TestCase):
         Tests the gather step of the agent.
         """
         # For this test, we'll replace the tool calls with mocks
-        with unittest.mock.patch("myai.storm_agent.exa_search_tool") as mock_exa, \
-             unittest.mock.patch("myai.storm_agent.arxiv_search_tool") as mock_arxiv:
-            
+        with (
+            unittest.mock.patch("myai.storm_agent.exa_search_tool") as mock_exa,
+            unittest.mock.patch("myai.storm_agent.arxiv_search_tool") as mock_arxiv,
+            unittest.mock.patch("myai.storm_agent.pubmed_search_tool") as mock_pubmed,
+        ):
             mock_exa.invoke.return_value = [{"title": "Exa Article"}]
             mock_arxiv.invoke.return_value = [{"title": "Arxiv Article"}]
+            mock_pubmed.invoke.return_value = [{"title": "PubMed Article"}]
 
             initial_state = ResearchState(topic="Test Topic", questions=["Q1"])
             result_state = self.agent._gather_step(initial_state)
 
-            self.assertEqual(len(result_state.articles), 2)
-            self.assertEqual(result_state.articles[0]["title"], "Exa Article")
-            self.assertEqual(result_state.articles[1]["title"], "Arxiv Article")
+            self.assertEqual(len(result_state.articles), 3)
+            self.assertEqual(result_state.articles[0]["title"], "PubMed Article")
+            self.assertEqual(result_state.articles[1]["title"], "Exa Article")
+            self.assertEqual(result_state.articles[2]["title"], "Arxiv Article")
 
     def test_synthesize_step(self):
         """

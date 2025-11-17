@@ -12,6 +12,7 @@ import time
 import logging
 from typing import Any, Dict, Optional, Iterator
 from datetime import datetime
+from collections.abc import Mapping
 
 logger = logging.getLogger("myai.llm.impl")
 if not logger.handlers:
@@ -157,13 +158,71 @@ class LLMManager:
             logger.exception("get_streaming_completion failed")
             return None
 
+    def _to_mapping(self, value: Any) -> Optional[Mapping[str, Any]]:
+        """Best-effort conversion of model/namespace objects to plain mappings."""
+        if isinstance(value, Mapping):
+            return value
+        for attr in ("model_dump", "dict"):
+            if hasattr(value, attr):
+                try:
+                    data = getattr(value, attr)()
+                    if isinstance(data, Mapping):
+                        return data
+                except Exception:
+                    continue
+        return None
+
+    def _extract_content(self, node: Any) -> str:
+        """Extract textual content from message/delta payloads."""
+        if not node:
+            return ""
+        if isinstance(node, str):
+            return node
+        if isinstance(node, list):
+            parts = [self._extract_content(part) for part in node]
+            combined = "".join(part for part in parts if part)
+            return combined
+        mapping = self._to_mapping(node)
+        if mapping:
+            for key in ("content", "text"):
+                if key in mapping:
+                    extracted = self._extract_content(mapping[key])
+                    if extracted:
+                        return extracted
+        for attr in ("content", "text"):
+            if hasattr(node, attr):
+                extracted = self._extract_content(getattr(node, attr))
+                if extracted:
+                    return extracted
+        return ""
+
     def extract_assistant_text(self, response: Optional[Dict[str, Any]]) -> str:
         if not response:
             return ""
-        if isinstance(response, dict):
-            choices = response.get("choices")
-            if choices and len(choices) > 0:
-                return choices[0].get("message", {}).get("content", "") or ""
+        if isinstance(response, str):
+            return response
+
+        payload = self._to_mapping(response)
+        choices = None
+        if payload:
+            choices = payload.get("choices")
+        if not choices and hasattr(response, "choices"):
+            choices = getattr(response, "choices")
+        if not choices:
+            return ""
+
+        first_choice = choices[0]
+        choice_map = self._to_mapping(first_choice) or {}
+
+        for key in ("message", "delta", "content"):
+            candidate = choice_map.get(key) or getattr(first_choice, key, None)
+            text = self._extract_content(candidate)
+            if text:
+                return text
+
+        if isinstance(first_choice, str):
+            return first_choice
+
         return ""
 
     def extract_assistant_json(self, response: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

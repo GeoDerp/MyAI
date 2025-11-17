@@ -102,8 +102,9 @@ class AdaptiveLLMHandler:
         """
         # Base calculation depends on CPU vs GPU mode
         if self.cpu_only_mode:
-            # CPU-only: ~5-10 seconds per 100 chars, highly dependent on context
-            estimated = max(300, (prompt_length // 100) * 7 + 120)
+            # CPU-only: Much longer timeouts needed for small models on CPU
+            # ~10-15 seconds per 100 chars, with generous base timeout
+            estimated = max(600, (prompt_length // 100) * 12 + 240)
         else:
             # GPU mode: ~1-3 seconds per 100 chars
             estimated = max(120, (prompt_length // 100) * 3 + 60)
@@ -376,10 +377,11 @@ class AdaptiveLLMHandler:
         if not articles:
             return f"[No articles available to synthesize for topic: {topic}]"
         
-        # Adjust chunk size for CPU-only mode
-        if self.cpu_only_mode and max_chunk_chars > 5000:
-            max_chunk_chars = 4000
-            logger.info(f"CPU-only mode: reducing chunk size to {max_chunk_chars} chars")
+        # Adjust chunk size for CPU-only mode - larger chunks mean fewer LLM calls
+        if self.cpu_only_mode:
+            # Increase chunk size to reduce number of chunks/LLM calls
+            max_chunk_chars = 6000
+            logger.info(f"CPU-only mode: using larger chunks ({max_chunk_chars} chars) to reduce LLM calls")
         
         # Split articles into chunks
         chunks = self._chunk_articles(articles, max_chunk_chars)

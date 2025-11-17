@@ -92,42 +92,46 @@ def run_research_task(task_id, question, base_url, max_iterations, min_confidenc
         # Save HTML output
         try:
             from flask import render_template_string
-            # Load template
-            with open(os.path.join(os.path.dirname(__file__), 'templates', 'index.html'), 'r') as f:
-                template_content = f.read()
-            
-            rendered = render_template_string(template_content, result=result, request=None)
-            tmp_path = os.environ.get('MYAI_RENDERED_OUTPUT', '/tmp/research_report.html')
-            tmp_write = tmp_path + '.tmp'
-            with open(tmp_write, 'w', encoding='utf-8') as f:
-                f.write(rendered)
-            try:
-                os.replace(tmp_write, tmp_path)
-            except Exception:
-                import shutil
-                shutil.move(tmp_write, tmp_path)
-            
-            with tasks_lock:
-                tasks[task_id]['output_path'] = tmp_path
-            
-            logger.info(f"webui: task {task_id} saved output to {tmp_path}")
-            
-            # Write provenance bundle
-            try:
-                from myai.provenance import write_provenance_bundle
-                prov = None
-                if isinstance(result, dict):
-                    prov = result.get('provenance') or result.get('provenance_bundle')
-                else:
-                    prov = getattr(result, 'provenance', None)
-                if prov:
-                    partial_dir = os.path.dirname(tmp_path) or os.environ.get('MYAI_PARTIAL_DIR', '/tmp')
-                    meta = {'rendered_html': tmp_path, 'task_id': task_id}
-                    bundle_path = write_provenance_bundle([], metadata=meta, outdir=partial_dir)
-                    if bundle_path:
-                        logger.info(f'webui: task {task_id} wrote provenance to {bundle_path}')
-            except Exception as e:
-                logger.debug(f'webui: provenance bundle write failed for task {task_id}: {e}')
+
+            with app.app_context():
+                # Load template from disk while within the application context so
+                # render_template_string has access to current_app.
+                template_path = os.path.join(os.path.dirname(__file__), 'templates', 'index.html')
+                with open(template_path, 'r') as f:
+                    template_content = f.read()
+                
+                rendered = render_template_string(template_content, result=result, request=None)
+                tmp_path = os.environ.get('MYAI_RENDERED_OUTPUT', '/tmp/research_report.html')
+                tmp_write = tmp_path + '.tmp'
+                with open(tmp_write, 'w', encoding='utf-8') as f:
+                    f.write(rendered)
+                try:
+                    os.replace(tmp_write, tmp_path)
+                except Exception:
+                    import shutil
+                    shutil.move(tmp_write, tmp_path)
+                
+                with tasks_lock:
+                    tasks[task_id]['output_path'] = tmp_path
+                
+                logger.info(f"webui: task {task_id} saved output to {tmp_path}")
+                
+                # Write provenance bundle
+                try:
+                    from myai.provenance import write_provenance_bundle
+                    prov = None
+                    if isinstance(result, dict):
+                        prov = result.get('provenance') or result.get('provenance_bundle')
+                    else:
+                        prov = getattr(result, 'provenance', None)
+                    if prov:
+                        partial_dir = os.path.dirname(tmp_path) or os.environ.get('MYAI_PARTIAL_DIR', '/tmp')
+                        meta = {'rendered_html': tmp_path, 'task_id': task_id}
+                        bundle_path = write_provenance_bundle([], metadata=meta, outdir=partial_dir)
+                        if bundle_path:
+                            logger.info(f'webui: task {task_id} wrote provenance to {bundle_path}')
+                except Exception as e:
+                    logger.debug(f'webui: provenance bundle write failed for task {task_id}: {e}')
                 
         except Exception as e:
             logger.exception(f'webui: failed to save output for task {task_id}')
@@ -247,7 +251,7 @@ def index():
 
             model_arg = ramalama_model
             if use_ramalama:
-                ramalama_host = request.form.get('ramalama_host', os.getenv('RAMALAMA_HOST', 'localhost'))
+                ramalama_host = request.form.get('ramalama_host', os.getenv('RAMALAMA_HOST', 'research-agent'))
                 ramalama_port = request.form.get('ramalama_port', os.getenv('RAMALAMA_PORT', '8080'))
                 model_arg = f"http://{ramalama_host}:{ramalama_port}/v1"
                 os.environ['RAMALAMA_MODEL'] = ramalama_model
@@ -260,6 +264,16 @@ def index():
             
             # If background mode is requested, start a background thread
             if background:
+                # Enforce single-task policy: check if any task is currently running
+                with tasks_lock:
+                    running_tasks = [tid for tid, t in tasks.items() if t['status'] in ('pending', 'running')]
+                    if running_tasks:
+                        # Block new task submission; return error or wait for completion
+                        logger.warning(f"webui: rejecting new background task; tasks {running_tasks} still in progress")
+                        return render_template('index.html',
+                                              result={'error': f'A research task is already running (task IDs: {running_tasks}). Please wait for it to complete before starting a new one.'},
+                                              request=request), 409
+                
                 task_id = str(uuid.uuid4())
                 with tasks_lock:
                     tasks[task_id] = {
